@@ -1,65 +1,68 @@
-import type {} from "@koishijs/plugin-http";
-import type {} from "@koishijs/plugin-server";
-import * as Effect from "effect/Effect";
-import type { Context } from "koishi";
-import {
-  Config as ConfigSchema,
-  providerLabel,
-  type Config as PluginConfig,
-} from "./config";
-import { validateConfig } from "./config-validation";
-import {
-  installConfiguredRuntime,
-  registerDatabaseModels,
-} from "./runtime";
+import { Context, Logger, Schema } from "koishi";
+import { initializeDatabase } from "./database-schema";
+import { registerCommands } from "./commands";
+import { checkTweetUpdates } from "./tweet-checker";
 
-/** Koishi 插件名称。 */
 export const name = "x-watcher";
 
-/** Koishi 插件配置 Schema。 */
-export const Config = ConfigSchema;
-
-/** Koishi 插件配置类型。 */
-export type Config = PluginConfig;
-
-/** 插件静态服务依赖；实时模式会在运行时等待可选服务。 */
-export const inject = {
-  required: ["database"],
-  optional: ["http", "server"],
-};
-
-/** Koishi 控制台中展示的简要使用说明。 */
 export const usage = `
-使用 \`watch <用户名> [正则]\` 在当前私聊或频道订阅 X/Twitter 动态。
+### 如何获取apiKey
+1. 从 Chrome 应用商店安装 [X Auth Helper extension](https://chromewebstore.google.com/detail/x-auth-helper/igpkhkjmpdecacocghpgkghdcmcmpfhp) 扩展程序，并允许其在无痕模式下运行。
+2. 切换至无痕模式后登录 Twitter/X 账号。
+3. 成功登录后，在仍处于 Twitter/X 页面的状态下，点击浏览器扩展图标打开扩展弹窗。
+4. 点击 \`Get Key\` 按钮, 扩展将生成 \`API_KEY\` 并显示在文本区域中。
+5. 通过点击 \`API_KEY\` 按钮或手动从文本区域复制 \`API_KEY\` 。
+6. 此时可以关闭浏览器，但不要主动退出登录。请注意，由于处于无痕模式，您并未执行“退出登录”操作，因此虽然浏览器会话会被清除，但 \`API_KEY\` 仍然保持有效。
+7. 保存 \`API_KEY\` 以供使用。
 
-- \`watch @user -t post,reply -m\`：更新动态类型并启用媒体
-- \`watch @user --clear-filter\`：清除已有过滤规则
-- \`unwatch @user\`：软停用订阅
-- \`xlist\`：列出有效订阅；\`xlist --all\` 同时显示停用项
+### 如何使用
+- watch twitter_username - 订阅推文，twitter_username 为推特用户名，即@后的部分
+- unwatch twitter_username - 取消订阅推文
+- xlist - 查看订阅列表
 
-TwitterAPI.io 是稳定数据源；Rettiwt 为实验性逆向数据源。Webhook 模式同样为实验性能力。
+在哪里使用 watch 命令，推文的更新就会发送到哪里
+
+如果已有科学上网环境，但使用watch命令时总是“获取推特用户名失败”，大概是 nodejs 版本过低，请使用 nodejs21 及以上版本
+
+更多信息请前往存储库或npm阅读自述文件
 `;
 
-/** 应用插件并按模式等待其实际所需的 Koishi 服务。 */
-export const apply = (ctx: Context, config: PluginConfig): void => {
-  registerDatabaseModels(ctx);
-  const validation = Effect.runSync(Effect.either(validateConfig(config)));
-  if (validation._tag === "Left") {
-    ctx.logger(name).error("配置无效：%s", validation.left.message);
+export const inject = { required: ["database"] };
+
+export interface Config {
+  interval: number;
+  auth_key: string;
+}
+
+export const Config: Schema<Config> = Schema.object({
+  interval: Schema.number()
+    .default(5)
+    .min(1)
+    .description("检查推文更新间隔时间(分钟)"),
+  auth_key: Schema.string()
+    .role("secret")
+    .description("推特API密钥")
+    .required(),
+});
+
+export const logger = new Logger("x-watcher");
+
+export function apply(ctx: Context, config: Config) {
+  // 初始化数据库
+  try {
+    initializeDatabase(ctx);
+  } catch (error) {
+    logger.error("数据库初始化失败", error);
     return;
   }
-  ctx.logger(name).info("已选择 %s / %s 模式", providerLabel(config), config.mode);
-  if (config.provider === "rettiwt") {
-    installConfiguredRuntime(ctx, config);
-    return;
-  }
-  if (config.mode === "webhook") {
-    ctx.inject(["http", "server"], (injected) => {
-      installConfiguredRuntime(injected, config);
-    });
-    return;
-  }
-  ctx.inject(["http"], (injected) => {
-    installConfiguredRuntime(injected, config);
-  });
-};
+
+  // 注册命令
+  registerCommands(ctx, config);
+
+  // 启动推文检查定时器
+  ctx.setInterval(async () => {
+    await checkTweetUpdates(ctx, config);
+  }, config.interval * 60 * 1000); // 使用配置的间隔时间
+
+  logger.info(`推文检查定时器已启动，间隔时间: ${config.interval} 分钟`);
+}
