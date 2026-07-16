@@ -1,315 +1,458 @@
-import { Context } from "koishi";
-import { getTwitterUserInfo, getLatestTweetId } from "./utils";
+import type { Context, Logger, Session } from "koishi";
+import {
+  canonicalHandle,
+  compileFilter,
+  normalizeHandle,
+  success,
+  type XUser,
+} from "./domain";
+import {
+  getChannelWatchers,
+  type WatcherRecord,
+} from "./database";
 import { formatWatcherListMessage } from "./message-formatter";
-import { logger } from ".";
+import type { XDataSourceService } from "./services";
 
-/**
- * 命令配置
- */
-export interface CommandConfig {
-  auth_key: string;
-  interval: number;
+/** 命令共享的数据源和轮询提示间隔。 */
+interface CommandDependencyBase {
+  readonly source: XDataSourceService;
+  readonly interval: number;
 }
 
-/**
- * 注册所有命令
- * @param ctx Koishi 上下文
- * @param config 配置
- */
-export function registerCommands(ctx: Context, config: CommandConfig): void {
-  registerWatchCommand(ctx, config);
-  registerUnwatchCommand(ctx, config);
-  registerListCommand(ctx);
+/** 命令依赖保持模式与远端 monitor 能力的判别关系。 */
+export type CommandDependencies = CommandDependencyBase & (
+  | { readonly mode: "polling"; readonly synchronizeMonitors: null }
+  | {
+      readonly mode: "websocket";
+      readonly synchronizeMonitors: () => Promise<boolean>;
+    }
+);
+
+/** watch 命令的完整覆盖选项。 */
+interface WatchOptions {
+  readonly media: boolean;
+  readonly quote: boolean;
+  readonly retweet: boolean;
 }
 
-/**
- * 注册订阅命令
- * @param ctx Koishi 上下文
- * @param config 配置
- */
-function registerWatchCommand(ctx: Context, config: CommandConfig): void {
+/** 命令执行所需的频道定位信息。 */
+interface SessionAddress {
+  readonly platform: string;
+  readonly channelId: string;
+  readonly userId: string;
+  readonly botId: string;
+}
+
+/** 统一等待命令回复，避免适配器拒绝时留下未处理 Promise。 */
+async function reply(session: Session, message: string): Promise<void> {
+  await session.send(message);
+}
+
+/** 在写数据库前收紧 Koishi 会话中的可选地址字段。 */
+function sessionAddress(session: Session): SessionAddress | null {
+  if (
+    session.channelId === undefined ||
+    session.userId === undefined ||
+    session.bot.selfId.length === 0
+  ) {
+    return null;
+  }
+  return {
+    platform: session.platform,
+    channelId: session.channelId,
+    userId: session.userId,
+    botId: session.bot.selfId,
+  };
+}
+
+/** 把可选正则参数规范化为空值或去除首尾空白的规则。 */
+function normalizeFilterInput(regexp: string | undefined): string | null {
+  if (regexp === undefined || regexp.trim().length === 0) return null;
+  return regexp.trim();
+}
+
+/** 从数据库订阅还原稳定用户资料。 */
+function userFromWatcher(watcher: WatcherRecord): XUser {
+  return {
+    id: watcher.twitter_id,
+    username: watcher.twitter_username,
+    fullname: watcher.twitter_fullname,
+  };
+}
+
+/** 在当前频道中按大小写无关用户名查找已有订阅。 */
+function findByHandle(
+  watchers: ReadonlyArray<WatcherRecord>,
+  handle: string,
+): WatcherRecord | undefined {
+  const canonical = canonicalHandle(handle);
+  return watchers.find(
+    (watcher) => canonicalHandle(watcher.twitter_username) === canonical,
+  );
+}
+
+/** 将 Account Stream 同步结果附加到用户可见回复。 */
+async function remoteSyncSuffix(
+  synchronizeMonitors: (() => Promise<boolean>) | null,
+): Promise<string> {
+  if (synchronizeMonitors === null) return "";
+  try {
+    const synchronized = await synchronizeMonitors();
+    return synchronized ? "" : "\n已保存，远端 Stream 同步待重试";
+  } catch {
+    return "\n已保存，远端 Stream 同步待重试";
+  }
+}
+
+/** 构造 watch 成功后的规则摘要。 */
+function watchSummary(
+  filter: string | null,
+  options: WatchOptions,
+): string {
+  const filterText = filter === null ? "无" : filter;
+  return [
+    `过滤条件：${filterText}`,
+    `媒体：${options.media ? "包含" : "不含"}`,
+    `引用：${options.quote ? "开启" : "关闭"}`,
+    `转推：${options.retweet ? "开启" : "关闭"}`,
+  ].join("\n");
+}
+
+/** 更新当前频道中同一个稳定 X 用户的订阅设置。 */
+async function updateExistingWatcher(
+  ctx: Context,
+  address: SessionAddress,
+  watcher: WatcherRecord,
+  user: XUser,
+  filter: string | null,
+  options: WatchOptions,
+  reactivate: boolean,
+  baseline: string | null,
+): Promise<void> {
+  const now = new Date();
+  await ctx.database.set(
+    "x_watcher",
+    {
+      platform: watcher.platform,
+      channelId: watcher.channelId,
+      twitter_id: watcher.twitter_id,
+    },
+    {
+      userId: address.userId,
+      botId: address.botId,
+      twitter_username: user.username,
+      twitter_fullname: user.fullname,
+      last_tweet_id: reactivate ? baseline : watcher.last_tweet_id,
+      filter_regexp: filter,
+      media: options.media,
+      include_quote: options.quote,
+      include_retweet: options.retweet,
+      active: true,
+      enabled_at: reactivate ? now : watcher.enabled_at,
+      update_at: now,
+    },
+  );
+}
+
+/** 创建一个从当前最新水位开始的新频道订阅。 */
+async function createWatcher(
+  ctx: Context,
+  address: SessionAddress,
+  user: XUser,
+  baseline: string | null,
+  filter: string | null,
+  options: WatchOptions,
+): Promise<void> {
+  const now = new Date();
+  await ctx.database.create("x_watcher", {
+    platform: address.platform,
+    channelId: address.channelId,
+    userId: address.userId,
+    botId: address.botId,
+    twitter_fullname: user.fullname,
+    twitter_username: user.username,
+    twitter_id: user.id,
+    last_tweet_id: baseline,
+    filter_regexp: filter,
+    media: options.media,
+    include_quote: options.quote,
+    include_retweet: options.retweet,
+    active: true,
+    enabled_at: now,
+    create_at: now,
+    update_at: now,
+  });
+}
+
+/** 注册新增和完整更新订阅的 watch 命令。 */
+function registerWatchCommand(
+  ctx: Context,
+  dependencies: CommandDependencies,
+  logger: Logger,
+): void {
   ctx
-    .command("x-watcher.watch <twitter_username> [regexp:text]", "订阅博主推文")
+    .command(
+      "x-watcher.watch <twitter_username> [regexp:text]",
+      "订阅 X/Twitter 用户动态",
+    )
     .option("media", "-m", { fallback: false })
+    .option("quote", "--quote", { fallback: false })
+    .option("retweet", "--retweet", { fallback: false })
     .alias("watch")
-    .action(async ({ session, options }, twitter_username, regexp) => {
-      try {
-        // 参数验证
-        if (!twitter_username || !twitter_username.trim()) {
-          session.send("请提供有效的推特用户名");
-          return;
-        }
-
-        // 验证正则表达式
-        let filterRegexp: string | null = null;
-        if (regexp && regexp.trim()) {
-          try {
-            new RegExp(regexp.trim());
-            filterRegexp = regexp.trim();
-          } catch (error) {
-            session.send(`正则表达式格式错误: ${error.message}`);
-            return;
-          }
-        }
-
-        // 解析聊天类型和id
-        const { platform, channelId, userId } = session;
-
-        // 获取推特用户名
-        let twitter_info: { fullname: string; id: string; username: string };
-        try {
-          twitter_info = await getTwitterUserInfo(
-            twitter_username,
-            config.auth_key
-          );
-        } catch (error) {
-          session.send(`${error}`);
-          return;
-        }
-
-        // 数据库操作
-        try {
-          // 检查订阅是否存在
-          const watchers = await ctx.database.get("x_watcher", {
-            twitter_id: twitter_info.id,
-            platform: platform,
-            channelId: channelId,
-          });
-
-          if (watchers.length === 0) {
-            // 没有订阅，则添加订阅
-            // 获取最新推文ID
-            let latestTweetId: string | null = null;
-            try {
-              latestTweetId = await getLatestTweetId(
-                twitter_info.id,
-                config.auth_key
-              );
-            } catch (error) {
-              logger.warn(
-                `获取用户 ${twitter_info.username} 最新推文ID失败，将在后续检查中初始化:`,
-                error
-              );
-            }
-
-            await ctx.database.create("x_watcher", {
-              platform: platform,
-              channelId: channelId,
-              userId: userId,
-              botId: session.bot.selfId,
-              twitter_username: twitter_info.username,
-              twitter_id: twitter_info.id,
-              twitter_fullname: twitter_info.fullname,
-              last_tweet_id: latestTweetId,
-              filter_regexp: filterRegexp,
-              media: options.media || false,
-              active: true,
-              create_at: new Date(),
-              update_at: new Date(),
-            });
-
-            const filterInfo = filterRegexp
-              ? `\n过滤条件: ${filterRegexp}`
-              : "";
-            const mediaInfo = options.media ? "\n媒体: 包含" : "\n媒体: 不含";
-            session.send(
-              `已添加 ${twitter_info.fullname} 的推文订阅，将在 ${twitter_info.fullname} 发布推文后的${config.interval}分钟内转发到此处${filterInfo}${mediaInfo}`
-            );
-            return;
-          } else if (!watchers[0].active) {
-            // 已存在订阅但未激活，则激活订阅并更新用户名
-            // 获取最新推文ID
-            let latestTweetId: string | null = watchers[0].last_tweet_id;
-            try {
-              const newLatestTweetId = await getLatestTweetId(
-                twitter_info.id,
-                config.auth_key
-              );
-              if (newLatestTweetId) {
-                latestTweetId = newLatestTweetId;
-              }
-            } catch (error) {
-              logger.warn(
-                `获取用户 ${twitter_info.username} 最新推文ID失败，使用原有ID:`,
-                error
-              );
-            }
-
-            await ctx.database.set(
-              "x_watcher",
-              {
-                twitter_id: twitter_info.id,
-                platform: platform,
-                channelId: channelId,
-              },
-              {
-                twitter_username: twitter_info.username,
-                twitter_fullname: twitter_info.fullname,
-                last_tweet_id: latestTweetId,
-                filter_regexp: filterRegexp,
-                media: options.media || false,
-                active: true,
-                update_at: new Date(),
-              }
-            );
-            const filterInfo = filterRegexp
-              ? `\n过滤条件: ${filterRegexp}`
-              : "";
-            const mediaInfo = options.media ? "\n媒体: 包含" : "\n媒体: 不含";
-            session.send(
-              `已重新订阅 ${twitter_info.fullname}${filterInfo}${mediaInfo}`
-            );
-            return;
-          } else {
-            // 已存在订阅且已激活，更新用户名
-            await ctx.database.set(
-              "x_watcher",
-              {
-                twitter_id: twitter_info.id,
-                platform: platform,
-                channelId: channelId,
-              },
-              {
-                twitter_username: twitter_info.username,
-                twitter_fullname: twitter_info.fullname,
-                filter_regexp: filterRegexp,
-                media: options.media || false,
-                active: true,
-                update_at: new Date(),
-              }
-            );
-            const filterInfo = filterRegexp
-              ? `\n过滤条件: ${filterRegexp}`
-              : "";
-            const mediaInfo = options.media ? "\n媒体: 包含" : "\n媒体: 不含";
-            session.send(
-              `已更新订阅 ${twitter_info.fullname}${filterInfo}${mediaInfo}`
-            );
-            return;
-          }
-        } catch (error) {
-          logger.error("数据库操作失败", error);
-          session.send(
-            "由于内部错误而订阅失败，这并非您的原因，请联系开发者或等待修复"
-          );
-          return;
-        }
-      } catch (error) {
-        logger.error("订阅命令执行失败", error);
-        session.send("命令执行失败，请稍后重试");
+    .action(async ({ session, options }, twitterUsername, regexp) => {
+      if (session === undefined) return;
+      if (twitterUsername === undefined) {
+        await reply(session, "请提供要订阅的 X/Twitter 用户名");
         return;
       }
-    });
-}
+      const address = sessionAddress(session);
+      if (address === null) {
+        await reply(session, "当前会话缺少频道或用户标识，无法保存订阅");
+        return;
+      }
+      const parsedHandle = normalizeHandle(twitterUsername);
+      if (!parsedHandle.ok) {
+        await reply(session, parsedHandle.error);
+        return;
+      }
+      const filter = normalizeFilterInput(regexp);
+      const compiled = compileFilter(filter);
+      if (!compiled.ok) {
+        await reply(session, `正则表达式格式错误：${compiled.error}`);
+        return;
+      }
+      const watchOptions: WatchOptions = {
+        media: options !== undefined && options.media === true,
+        quote: options !== undefined && options.quote === true,
+        retweet: options !== undefined && options.retweet === true,
+      };
 
-/**
- * 注册取消订阅命令
- * @param ctx Koishi 上下文
- * @param config 配置
- */
-function registerUnwatchCommand(ctx: Context, config: CommandConfig): void {
-  ctx
-    .command("x-watcher.unwatch <twitter_username>", "取消订阅博主推文")
-    .alias("unwatch")
-    .action(async ({ session }, twitter_username) => {
       try {
-        // 参数验证
-        if (!twitter_username || !twitter_username.trim()) {
-          session.send("请提供有效的推特用户名");
+        const channelWatchers = await getChannelWatchers(
+          ctx,
+          address.platform,
+          address.channelId,
+        );
+        const localMatch = findByHandle(channelWatchers, parsedHandle.value);
+
+        // 活跃订阅的规则更新不依赖远端 API，数据源短暂故障时仍可操作。
+        if (localMatch !== undefined && localMatch.active) {
+          await updateExistingWatcher(
+            ctx,
+            address,
+            localMatch,
+            userFromWatcher(localMatch),
+            filter,
+            watchOptions,
+            false,
+            localMatch.last_tweet_id,
+          );
+          const remote = await remoteSyncSuffix(
+            dependencies.synchronizeMonitors,
+          );
+          await reply(
+            session,
+            `已更新 ${localMatch.twitter_fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+          );
           return;
         }
 
-        const { platform, channelId } = session;
-
-        let twitter_info: { fullname: string; id: string; username: string };
-        try {
-          twitter_info = await getTwitterUserInfo(
-            twitter_username,
-            config.auth_key
+        const resolved =
+          localMatch === undefined
+            ? await dependencies.source.resolveUser(parsedHandle.value)
+            : success(userFromWatcher(localMatch));
+        if (!resolved.ok) {
+          await reply(
+            session,
+            `获取 X/Twitter 用户失败：${resolved.error.message}`,
           );
-        } catch (error) {
-          logger.error("获取推特用户信息失败", error);
           return;
         }
 
-        try {
-          // 检查订阅是否存在
-          const watchers = await ctx.database.get("x_watcher", {
-            twitter_id: twitter_info.id,
-            platform: platform,
-            channelId: channelId,
-          });
-
-          if (watchers.length === 0) {
-            session.send("订阅不存在");
-            return;
-          }
-
-          const watcher = watchers[0];
-          if (!watcher.active) {
-            session.send(`${watcher.twitter_username} 的订阅已经是取消状态`);
-            return;
-          }
-
-          // 取消激活状态
-          await ctx.database.set(
-            "x_watcher",
-            {
-              platform: platform,
-              channelId: channelId,
-              twitter_id: twitter_info.id,
-            },
-            {
-              twitter_fullname: twitter_info.fullname,
-              twitter_username: twitter_info.username,
-              active: false,
-              update_at: new Date(),
-            }
+        const stableMatch = channelWatchers.find(
+          (watcher) => watcher.twitter_id === resolved.value.id,
+        );
+        if (stableMatch !== undefined && stableMatch.active) {
+          await updateExistingWatcher(
+            ctx,
+            address,
+            stableMatch,
+            resolved.value,
+            filter,
+            watchOptions,
+            false,
+            stableMatch.last_tweet_id,
           );
+          const remote = await remoteSyncSuffix(
+            dependencies.synchronizeMonitors,
+          );
+          await reply(
+            session,
+            `已更新 ${resolved.value.fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+          );
+          return;
+        }
 
-          session.send(`已取消 ${watcher.twitter_username} 的推文订阅`);
-        } catch (error) {
-          logger.error("数据库操作失败", error);
-          session.send(
-            "由于内部错误而取消订阅失败，这并非您的原因，请联系开发者或等待修复"
+        const baseline = await dependencies.source.fetchBaseline(resolved.value);
+        if (!baseline.ok) {
+          await reply(
+            session,
+            `建立订阅水位失败：${baseline.error.message}`,
+          );
+          return;
+        }
+
+        const existing = stableMatch === undefined ? localMatch : stableMatch;
+        if (existing === undefined) {
+          await createWatcher(
+            ctx,
+            address,
+            resolved.value,
+            baseline.value,
+            filter,
+            watchOptions,
+          );
+        } else {
+          await updateExistingWatcher(
+            ctx,
+            address,
+            existing,
+            resolved.value,
+            filter,
+            watchOptions,
+            true,
+            baseline.value,
           );
         }
+        const remote = await remoteSyncSuffix(
+          dependencies.synchronizeMonitors,
+        );
+        const deliveryExpectation = dependencies.mode === "websocket"
+          ? "后续动态将通过实时流推送"
+          : `后续动态将在约 ${dependencies.interval} 分钟内推送`;
+        await reply(
+          session,
+          `已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
+        );
       } catch (error) {
-        logger.error("取消订阅命令执行失败", error);
-        session.send("命令执行失败，请稍后重试");
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`watch 命令失败：${message}`);
+        await reply(session, "订阅失败，请稍后重试");
       }
     });
 }
 
-/**
- * 注册查看订阅列表命令
- * @param ctx Koishi 上下文
- */
-function registerListCommand(ctx: Context): void {
+/** 注册不依赖远端成功即可软取消的 unwatch 命令。 */
+function registerUnwatchCommand(
+  ctx: Context,
+  dependencies: CommandDependencies,
+  logger: Logger,
+): void {
   ctx
-    .command("x-watcher.list", "查看推特订阅列表")
+    .command(
+      "x-watcher.unwatch <twitter_username>",
+      "取消 X/Twitter 用户订阅",
+    )
+    .alias("unwatch")
+    .action(async ({ session }, twitterUsername) => {
+      if (session === undefined) return;
+      if (twitterUsername === undefined) {
+        await reply(session, "请提供要取消订阅的 X/Twitter 用户名");
+        return;
+      }
+      const address = sessionAddress(session);
+      if (address === null) {
+        await reply(session, "当前会话缺少频道或用户标识，无法管理订阅");
+        return;
+      }
+      const parsedHandle = normalizeHandle(twitterUsername);
+      if (!parsedHandle.ok) {
+        await reply(session, parsedHandle.error);
+        return;
+      }
+      try {
+        const watchers = await getChannelWatchers(
+          ctx,
+          address.platform,
+          address.channelId,
+        );
+        let target = findByHandle(watchers, parsedHandle.value);
+        if (target === undefined) {
+          const resolved = await dependencies.source.resolveUser(
+            parsedHandle.value,
+          );
+          if (resolved.ok) {
+            target = watchers.find(
+              (watcher) => watcher.twitter_id === resolved.value.id,
+            );
+          }
+        }
+        if (target === undefined) {
+          await reply(session, "订阅不存在");
+          return;
+        }
+        if (!target.active) {
+          await reply(session, `${target.twitter_username} 的订阅已经取消`);
+          return;
+        }
+        await ctx.database.set(
+          "x_watcher",
+          {
+            platform: target.platform,
+            channelId: target.channelId,
+            twitter_id: target.twitter_id,
+          },
+          { active: false, update_at: new Date() },
+        );
+        const remote = await remoteSyncSuffix(
+          dependencies.synchronizeMonitors,
+        );
+        await reply(
+          session,
+          `已取消 ${target.twitter_username} 的订阅${remote}`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`unwatch 命令失败：${message}`);
+        await reply(session, "取消订阅失败，请稍后重试");
+      }
+    });
+}
+
+/** 注册当前频道订阅列表命令。 */
+function registerListCommand(ctx: Context, logger: Logger): void {
+  ctx
+    .command("x-watcher.list", "查看 X/Twitter 订阅列表")
     .alias("xlist")
     .action(async ({ session }) => {
+      if (session === undefined) return;
+      const address = sessionAddress(session);
+      if (address === null) {
+        await reply(session, "当前会话缺少频道或用户标识，无法读取订阅");
+        return;
+      }
       try {
-        const { platform, channelId } = session;
-
-        try {
-          const watchers = await ctx.database.get("x_watcher", {
-            platform: platform,
-            channelId: channelId,
-          });
-
-          const message = formatWatcherListMessage(watchers);
-          session.send(message);
-        } catch (error) {
-          logger.error("数据库操作失败", error);
-          session.send(
-            "由于内部错误而获取订阅列表失败，这并非您的原因，请联系开发者或等待修复"
-          );
-        }
+        const watchers = await getChannelWatchers(
+          ctx,
+          address.platform,
+          address.channelId,
+        );
+        await reply(session, formatWatcherListMessage(watchers));
       } catch (error) {
-        logger.error("查看订阅列表命令执行失败", error);
-        session.send("命令执行失败，请稍后重试");
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`xlist 命令失败：${message}`);
+        await reply(session, "获取订阅列表失败，请稍后重试");
       }
     });
+}
+
+/** 注册插件全部公开命令。 */
+export function registerCommands(
+  ctx: Context,
+  dependencies: CommandDependencies,
+  logger: Logger,
+): void {
+  registerWatchCommand(ctx, dependencies, logger);
+  registerUnwatchCommand(ctx, dependencies, logger);
+  registerListCommand(ctx, logger);
 }

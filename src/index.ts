@@ -1,68 +1,127 @@
-import { Context, Logger, Schema } from "koishi";
-import { initializeDatabase } from "./database-schema";
+import { Context, Logger } from "koishi";
 import { registerCommands } from "./commands";
-import { checkTweetUpdates } from "./tweet-checker";
+import { Config, type Config as PluginConfig } from "./config";
+import { extendWatcherTable, migrateWatcherTable } from "./database";
+import { createRettiwtDataSource } from "./providers/rettiwt";
+import { createTwitterAccountStreamService } from "./providers/twitter-stream";
+import { createTwitterApiDataSource } from "./providers/twitterapi";
+import {
+  createAccountStreamRuntime,
+  createPollingRuntime,
+  type PluginRuntime,
+} from "./runtime";
 
 export const name = "x-watcher";
+export const inject = { required: ["database", "http"] };
+export { Config };
 
 export const usage = `
-### 如何获取apiKey
-1. 从 Chrome 应用商店安装 [X Auth Helper extension](https://chromewebstore.google.com/detail/x-auth-helper/igpkhkjmpdecacocghpgkghdcmcmpfhp) 扩展程序，并允许其在无痕模式下运行。
-2. 切换至无痕模式后登录 Twitter/X 账号。
-3. 成功登录后，在仍处于 Twitter/X 页面的状态下，点击浏览器扩展图标打开扩展弹窗。
-4. 点击 \`Get Key\` 按钮, 扩展将生成 \`API_KEY\` 并显示在文本区域中。
-5. 通过点击 \`API_KEY\` 按钮或手动从文本区域复制 \`API_KEY\` 。
-6. 此时可以关闭浏览器，但不要主动退出登录。请注意，由于处于无痕模式，您并未执行“退出登录”操作，因此虽然浏览器会话会被清除，但 \`API_KEY\` 仍然保持有效。
-7. 保存 \`API_KEY\` 以供使用。
+使用 \`watch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
+使用 \`unwatch <username>\` 软取消，使用 \`xlist\` 查看当前频道订阅。
 
-### 如何使用
-- watch twitter_username - 订阅推文，twitter_username 为推特用户名，即@后的部分
-- unwatch twitter_username - 取消订阅推文
-- xlist - 查看订阅列表
-
-在哪里使用 watch 命令，推文的更新就会发送到哪里
-
-如果已有科学上网环境，但使用watch命令时总是“获取推特用户名失败”，大概是 nodejs 版本过低，请使用 nodejs21 及以上版本
-
-更多信息请前往存储库或npm阅读自述文件
+升级前必须先把旧 \`auth_key\` 改为 \`apiKeys\`；Rettiwt 的 provider/mode 可省略，完整示例见 README。
 `;
 
-export const inject = { required: ["database"] };
+const logger = new Logger("x-watcher");
 
-export interface Config {
-  interval: number;
-  auth_key: string;
+/** 从判别运行时生成命令依赖，保持 mode 与 monitor 能力一致。 */
+function commandDependencies(
+  runtime: PluginRuntime,
+  interval: number,
+) {
+  if (runtime.mode === "polling") {
+    return {
+      source: runtime.source,
+      interval,
+      mode: runtime.mode,
+      synchronizeMonitors: runtime.synchronizeMonitors,
+    };
+  }
+  return {
+    source: runtime.source,
+    interval,
+    mode: runtime.mode,
+    synchronizeMonitors: runtime.synchronizeMonitors,
+  };
 }
 
-export const Config: Schema<Config> = Schema.object({
-  interval: Schema.number()
-    .default(5)
-    .min(1)
-    .description("检查推文更新间隔时间(分钟)"),
-  auth_key: Schema.string()
-    .role("secret")
-    .description("推特API密钥")
-    .required(),
-});
+/** 根据判别联合只创建一个 provider 和一个运行模式，不做跨源降级。 */
+function createRuntime(
+  ctx: Context,
+  config: PluginConfig,
+): PluginRuntime {
+  if (config.provider === "rettiwt") {
+    const source = createRettiwtDataSource({
+      apiKeys: config.apiKeys,
+      logger,
+    });
+    return createPollingRuntime(
+      ctx,
+      source,
+      logger,
+      config.interval,
+    );
+  }
 
-export const logger = new Logger("x-watcher");
+  const source = createTwitterApiDataSource(ctx, config.apiKey);
+  if (config.mode === "polling") {
+    return createPollingRuntime(
+      ctx,
+      source,
+      logger,
+      config.interval,
+    );
+  }
+  const stream = createTwitterAccountStreamService(ctx, config.apiKey);
+  return createAccountStreamRuntime(
+    ctx,
+    source,
+    stream,
+    logger,
+    config.interval,
+  );
+}
 
-export function apply(ctx: Context, config: Config) {
-  // 初始化数据库
+/**
+ * 表结构先交给 Koishi 同步，旧数据回填则延迟到 ready。
+ * 只有迁移完整成功后才注册命令和 worker，避免半迁移状态继续写入。
+ */
+export function apply(ctx: Context, config: PluginConfig): void {
   try {
-    initializeDatabase(ctx);
+    extendWatcherTable(ctx);
   } catch (error) {
-    logger.error("数据库初始化失败", error);
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`声明 x_watcher 表结构失败：${message}`);
     return;
   }
 
-  // 注册命令
-  registerCommands(ctx, config);
+  ctx.on("ready", async () => {
+    const migrated = await migrateWatcherTable(ctx);
+    if (!migrated.ok) {
+      logger.error(`迁移 x_watcher 表失败：${migrated.error}`);
+      return;
+    }
 
-  // 启动推文检查定时器
-  ctx.setInterval(async () => {
-    await checkTweetUpdates(ctx, config);
-  }, config.interval * 60 * 1000); // 使用配置的间隔时间
-
-  logger.info(`推文检查定时器已启动，间隔时间: ${config.interval} 分钟`);
+    try {
+      const runtime = createRuntime(ctx, config);
+      ctx.on("dispose", runtime.dispose);
+      try {
+        await runtime.start();
+        registerCommands(
+          ctx,
+          commandDependencies(runtime, config.interval),
+          logger,
+        );
+      } catch (error) {
+        runtime.dispose();
+        throw error;
+      }
+      logger.info(
+        `x-watcher 已启动：${config.provider}/${config.mode}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error(`启动 x-watcher 失败：${message}`);
+    }
+  });
 }
