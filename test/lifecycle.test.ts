@@ -45,7 +45,7 @@ afterEach(async () => {
 describe("插件生命周期", () => {
   it("只填写 Rettiwt API Key 池也能完成启动并注册命令", async () => {
     const { ctx } = await createEnvironment();
-    // @ts-expect-error 验证 Koishi Schema 会补齐默认的 provider、mode 和 interval
+    // // @ts-expect-error 验证 Koishi Schema 会补齐默认的 provider、mode 和 interval
     const config = Config({ apiKeys: ["offline-constructor-test-key"] });
 
     apply(ctx, config);
