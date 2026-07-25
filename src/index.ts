@@ -16,10 +16,26 @@ export const inject = { required: ["database", "http"] };
 export { Config };
 
 export const usage = `
-使用 \`watch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
-使用 \`unwatch <username>\` 软取消，使用 \`xlist\` 查看当前频道订阅。
+### 升级后请手动更新配置。
 
-升级前必须先把旧 \`auth_key\` 改为 \`apiKeys\`；Rettiwt 的 provider/mode 可省略，完整示例见 README。
+### 如何获取 Rettiwt apiKey
+1. 打开你的浏览器（Chrome/Chromium 内核/Firefox/Firefox 内核），访问 Twitter/X。
+2. 按下键盘上的 F12 键，打开浏览器开发者工具。
+3. 导航至 应用程序 -> Cookie（Chrome/Chromium 内核）或 存储 -> Cookie（Firefox/Firefox 内核）。
+4. 复制以下 3 个字段的值：auth_token、ct0、twid。这些将作为你的身份验证凭据。
+5. 进入浏览器开发者工具的控制台 ，执行命令：btoa("auth_token=<auth_token_value>;ct0=<ct0_value>;twid=<twid_value>;")。将token值替换为你复制的对应内容。
+6. 输出的字符串即为你的 API_KEY。
+
+### 如何使用
+- 使用 \`watch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
+- 使用 \`unwatch <username>\` 软取消
+- 使用 \`xlist\` 查看当前频道订阅。
+
+在哪里使用 watch 命令，推文的更新就会发送到哪里
+
+请使用 nodejs 22
+
+更多信息请前往存储库或 npm 阅读自述文件
 `;
 
 const logger = new Logger("x-watcher");
