@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -61,7 +62,7 @@ function inspectFile(file: string): Violation[] {
 
 describe("源码语法约束", () => {
   it("不使用 any、unknown、类型断言、非空断言或可选链", () => {
-    const root = new URL("../src", import.meta.url).pathname;
+    const root = fileURLToPath(new URL("../src", import.meta.url));
     const violations = sourceFiles(root).flatMap(inspectFile);
     expect(violations).toEqual([]);
   });
