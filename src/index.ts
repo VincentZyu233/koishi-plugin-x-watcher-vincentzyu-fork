@@ -5,11 +5,7 @@ import { extendWatcherTable, migrateWatcherTable } from "./database";
 import { createRettiwtDataSource } from "./providers/rettiwt";
 import { createTwitterAccountStreamService } from "./providers/twitter-stream";
 import { createTwitterApiDataSource } from "./providers/twitterapi";
-import {
-  createAccountStreamRuntime,
-  createPollingRuntime,
-  type PluginRuntime,
-} from "./runtime";
+import { createAccountStreamRuntime, createPollingRuntime, type PluginRuntime } from "./runtime";
 
 export const name = "x-watcher";
 export const inject = { required: ["database", "http"] };
@@ -41,10 +37,7 @@ export const usage = `
 const logger = new Logger("x-watcher");
 
 /** 从判别运行时生成命令依赖，保持 mode 与 monitor 能力一致。 */
-function commandDependencies(
-  runtime: PluginRuntime,
-  interval: number,
-) {
+function commandDependencies(runtime: PluginRuntime, interval: number) {
   if (runtime.mode === "polling") {
     return {
       source: runtime.source,
@@ -62,40 +55,21 @@ function commandDependencies(
 }
 
 /** 根据判别联合只创建一个 provider 和一个运行模式，不做跨源降级。 */
-function createRuntime(
-  ctx: Context,
-  config: PluginConfig,
-): PluginRuntime {
+function createRuntime(ctx: Context, config: PluginConfig): PluginRuntime {
   if (config.provider === "rettiwt") {
     const source = createRettiwtDataSource({
       apiKeys: config.apiKeys,
       logger,
     });
-    return createPollingRuntime(
-      ctx,
-      source,
-      logger,
-      config.interval,
-    );
+    return createPollingRuntime(ctx, source, logger, config.interval);
   }
 
   const source = createTwitterApiDataSource(ctx, config.apiKey);
   if (config.mode === "polling") {
-    return createPollingRuntime(
-      ctx,
-      source,
-      logger,
-      config.interval,
-    );
+    return createPollingRuntime(ctx, source, logger, config.interval);
   }
   const stream = createTwitterAccountStreamService(ctx, config.apiKey);
-  return createAccountStreamRuntime(
-    ctx,
-    source,
-    stream,
-    logger,
-    config.interval,
-  );
+  return createAccountStreamRuntime(ctx, source, stream, logger, config.interval);
 }
 
 /**
@@ -123,18 +97,12 @@ export function apply(ctx: Context, config: PluginConfig): void {
       ctx.on("dispose", runtime.dispose);
       try {
         await runtime.start();
-        registerCommands(
-          ctx,
-          commandDependencies(runtime, config.interval),
-          logger,
-        );
+        registerCommands(ctx, commandDependencies(runtime, config.interval), logger);
       } catch (error) {
         runtime.dispose();
         throw error;
       }
-      logger.info(
-        `x-watcher 已启动：${config.provider}/${config.mode}`,
-      );
+      logger.info(`x-watcher 已启动：${config.provider}/${config.mode}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`启动 x-watcher 失败：${message}`);
