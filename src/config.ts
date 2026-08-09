@@ -6,6 +6,13 @@ export interface RettiwtPollingConfig {
   readonly mode: "polling";
   readonly apiKeys: string[];
   readonly interval: number;
+  readonly proxy: ProxyConfig;
+}
+
+/** Rettiwt 与其原生 fetch 依赖共享的显式代理配置。 */
+export interface ProxyConfig {
+  readonly enabled: boolean;
+  readonly url: string;
 }
 
 /** TwitterAPI.io REST 轮询配置。 */
@@ -70,4 +77,13 @@ export const Config = Schema.object({
     .description("Rettiwt Cookie API Key 池")
     .required(),
   interval: IntervalSchema,
+  proxy: Schema.object({
+    enabled: Schema.boolean().default(false).description("启用显式代理"),
+    url: Schema.string()
+      .default("http://127.0.0.1:7890")
+      .description("HTTP/HTTPS 代理地址，同时用于 Rettiwt 与 Node fetch"),
+  }).default({
+    enabled: false,
+    url: "http://127.0.0.1:7890",
+  }).description("代理设置"),
 }).description("Rettiwt 轮询");

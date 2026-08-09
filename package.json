@@ -1,7 +1,7 @@
 {
-  "name": "koishi-plugin-x-watcher",
-  "description": "通过 Rettiwt 或 TwitterAPI.io 订阅指定 X/Twitter 用户动态",
-  "version": "0.2.0",
+  "name": "koishi-plugin-x-watcher-vincentzyu-fork",
+  "description": "🐦📡 通过 Rettiwt 或 TwitterAPI.io 订阅指定 X/Twitter 用户动态 🔔",
+  "version": "0.2.1-beta.1+20260809",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -10,7 +10,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": "^22.21.0"
+    "node": ">=22.17.0"
   },
   "repository": {
     "type": "git",
@@ -32,11 +32,14 @@
     "@satorijs/element": "^3.1.8",
     "axios": "^1.8.4",
     "rettiwt-api": "7.1.2",
+    "undici": "^7.28.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@koishijs/plugin-database-sqlite": "^4.6.0",
     "@koishijs/plugin-http": "^0.6.3",
+    "@types/node": "^22.7.5",
+    "koishi": "^4.18.7",
     "typescript": "^5.6.2",
     "vitest": "3.2.7",
     "yml-register": "^1.2.5"

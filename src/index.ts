@@ -5,6 +5,7 @@ import { extendWatcherTable, migrateWatcherTable } from "./database";
 import { createRettiwtDataSource } from "./providers/rettiwt";
 import { createTwitterAccountStreamService } from "./providers/twitter-stream";
 import { createTwitterApiDataSource } from "./providers/twitterapi";
+import { installProxy } from "./proxy";
 import { createAccountStreamRuntime, createPollingRuntime, type PluginRuntime } from "./runtime";
 
 export const name = "x-watcher";
@@ -29,7 +30,7 @@ export const usage = `
 
 在哪里使用 watch 命令，推文的更新就会发送到哪里
 
-请使用 nodejs 22
+请使用 Node.js 22.17 或更高版本
 
 更多信息请前往存储库或 npm 阅读自述文件
 `;
@@ -55,11 +56,16 @@ function commandDependencies(runtime: PluginRuntime, interval: number) {
 }
 
 /** 根据判别联合只创建一个 provider 和一个运行模式，不做跨源降级。 */
-function createRuntime(ctx: Context, config: PluginConfig): PluginRuntime {
+function createRuntime(
+  ctx: Context,
+  config: PluginConfig,
+  rettiwtProxy: string | undefined,
+): PluginRuntime {
   if (config.provider === "rettiwt") {
     const source = createRettiwtDataSource({
       apiKeys: config.apiKeys,
       logger,
+      ...(rettiwtProxy === undefined ? {} : { proxy: rettiwtProxy }),
     });
     return createPollingRuntime(ctx, source, logger, config.interval);
   }
@@ -92,18 +98,31 @@ export function apply(ctx: Context, config: PluginConfig): void {
       return;
     }
 
+    let disposeProxy: () => void = () => undefined;
     try {
-      const runtime = createRuntime(ctx, config);
-      ctx.on("dispose", runtime.dispose);
+      const proxy = config.provider === "rettiwt"
+        ? installProxy(config.proxy, logger)
+        : { rettiwtProxy: undefined, dispose: () => undefined };
+      disposeProxy = proxy.dispose;
+      const runtime = createRuntime(ctx, config, proxy.rettiwtProxy);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        runtime.dispose();
+        proxy.dispose();
+      };
+      ctx.on("dispose", dispose);
       try {
         await runtime.start();
         registerCommands(ctx, commandDependencies(runtime, config.interval), logger);
       } catch (error) {
-        runtime.dispose();
+        dispose();
         throw error;
       }
       logger.info(`x-watcher 已启动：${config.provider}/${config.mode}`);
     } catch (error) {
+      disposeProxy();
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`启动 x-watcher 失败：${message}`);
     }

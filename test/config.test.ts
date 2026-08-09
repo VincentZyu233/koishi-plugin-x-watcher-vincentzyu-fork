@@ -66,6 +66,10 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key-a", "key-b"],
       interval: 5,
+      proxy: {
+        enabled: false,
+        url: "http://127.0.0.1:7890",
+      },
     });
   });
 
@@ -80,6 +84,25 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key"],
       interval: 2,
+      proxy: {
+        enabled: false,
+        url: "http://127.0.0.1:7890",
+      },
+    });
+  });
+
+  it("接受显式 HTTP 代理配置", () => {
+    expect(Config({
+      apiKeys: ["key"],
+      proxy: {
+        enabled: true,
+        url: "http://127.0.0.1:7890",
+      },
+    })).toMatchObject({
+      proxy: {
+        enabled: true,
+        url: "http://127.0.0.1:7890",
+      },
     });
   });
 

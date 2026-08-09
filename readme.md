@@ -4,7 +4,7 @@
 
 在频道或私聊中订阅指定 X/Twitter 用户的原创、回复、引用和转推。插件支持 Rettiwt 轮询、TwitterAPI.io REST 轮询和 TwitterAPI.io Account Stream WebSocket；每个插件实例只运行一种数据源和模式，不会并行抓取或自动降级。
 
-运行环境要求 Node.js 22.21 或更新的 22.x 版本；这是固定依赖 `rettiwt-api@7.1.2` 的运行时要求，所有模式都会加载该依赖。
+运行环境要求 Node.js 22.17 或更高版本。Node.js 22 和 24 已通过自动化测试；Node.js 26 由兼容性测试矩阵持续验证。固定依赖 `rettiwt-api@7.1.2` 仍将运行时声明限制在 22.x，因此在 Node.js 24 或 26 安装时可能出现 `EBADENGINE` 警告，但不会在未启用 `engine-strict` 时阻止安装。
 
 ## 配置
 
@@ -15,6 +15,15 @@
 `apiKey`: Twitter/X webapi 身份验证凭据
 
 `interval`: 检查间隔（分钟）
+
+`proxy.enabled`: 是否启用插件显式代理，默认关闭
+
+`proxy.url`: HTTP/HTTPS 代理地址，例如 `http://127.0.0.1:7890`
+
+代理会同时传给 Rettiwt 的 Axios 请求，并接管其 `x-client-transaction-id`
+依赖使用的 Node 原生 `fetch`。由于 Node 的 dispatcher 是进程级资源，启用期间其他
+使用全局 `fetch` 的插件也会使用该代理；插件卸载时会在 dispatcher 未被其他组件替换的
+前提下恢复原值。当前不支持 SOCKS 代理。
 
 apiKey 池始终按配置顺序故障转移，不做负载均衡；认证失败的 key 会在当前进程隔离，触发 429 的 key 冷却 60 秒。
 

@@ -108,6 +108,32 @@ describe("createRettiwtDataSource", () => {
     ]);
   });
 
+  it("把显式代理传给每个 Rettiwt 客户端", async () => {
+    const configurations: RettiwtClientConfiguration[] = [];
+    const service = createRettiwtDataSource({
+      apiKeys: ["first-key", "second-key"],
+      proxy: "http://127.0.0.1:7890/",
+      createClient: (_apiKey, configuration) => {
+        configurations.push(configuration);
+        return createFakeClient();
+      },
+    });
+
+    expect((await service.resolveUser("alice")).ok).toBe(true);
+    expect(configurations).toEqual([
+      {
+        maxRetries: 0,
+        logging: false,
+        proxy: "http://127.0.0.1:7890/",
+      },
+      {
+        maxRetries: 0,
+        logging: false,
+        proxy: "http://127.0.0.1:7890/",
+      },
+    ]);
+  });
+
   it("隔离构造失败的凭据且日志不包含 key", async () => {
     const messages: string[] = [];
     const secret = "very-secret-cookie";

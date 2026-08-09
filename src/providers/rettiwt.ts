@@ -91,6 +91,7 @@ export interface RettiwtClient {
 export interface RettiwtClientConfiguration {
   readonly maxRetries: 0;
   readonly logging: false;
+  readonly proxy?: string;
 }
 
 type RateLimitBucket = "user-details" | "timeline" | "replies";
@@ -119,6 +120,7 @@ export interface RettiwtProviderLogger {
 /** Rettiwt provider 的函数式依赖注入参数。 */
 export interface RettiwtProviderOptions {
   readonly apiKeys: ReadonlyArray<string>;
+  readonly proxy?: string;
   readonly logger?: RettiwtProviderLogger;
   readonly now?: () => number;
   readonly createClient?: RettiwtClientFactory;
@@ -275,6 +277,9 @@ function createSdkClient(
     apiKey,
     logging: configuration.logging,
     maxRetries: configuration.maxRetries,
+    ...(configuration.proxy === undefined
+      ? {}
+      : { proxy: configuration.proxy }),
     responseMiddleware: (response) => {
       observeRateLimitHeaders(
         response.config.url,
@@ -393,7 +398,11 @@ function createTokenEntries(
         index,
         client: factory(
           apiKey,
-          { maxRetries: 0, logging: false },
+          {
+            maxRetries: 0,
+            logging: false,
+            ...(options.proxy === undefined ? {} : { proxy: options.proxy }),
+          },
           (bucket, observation) => {
             rateLimits.set(bucket, observation);
           },
