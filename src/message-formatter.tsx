@@ -1,5 +1,5 @@
 import Element from "@satorijs/element";
-import type { XActivity } from "./domain";
+import type { XActivity, XUser } from "./domain";
 import type { WatcherRecord } from "./database";
 
 /** 返回不同动态类型对应的中文动作。 */
@@ -50,24 +50,63 @@ function mediaElements(activity: XActivity, includeMedia: boolean): Element[] {
   return elements;
 }
 
+/** 构造动态消息的内容节点，供纯文字和图片加文字两种输出复用。 */
+export function activityMessageElements(
+  activity: XActivity,
+  includeMedia: boolean,
+): Element[] {
+  const text = cleanActivityText(activity.text);
+  return [
+    Element("p", `${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`),
+    Element("p", `发布时间：${formatActivityTime(activity.createdAt)}`),
+    Element("p", text),
+    ...mediaElements(activity, includeMedia),
+    Element("a", { href: activity.url }, "原文链接"),
+  ];
+}
+
 /** 构造可由 Koishi 适配器发送的图文混排消息。 */
 export function formatActivityMessage(
   activity: XActivity,
   includeMedia: boolean,
 ): string {
-  const medias = mediaElements(activity, includeMedia);
-  const text = cleanActivityText(activity.text);
-  const title = Element(
-    "p",
-    `${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`,
-  );
-  const time = Element(
-    "p",
-    `发布时间：${formatActivityTime(activity.createdAt)}`,
-  );
-  const body = Element("p", text);
-  const link = Element("a", { href: activity.url }, "原文链接");
-  return Element("message", title, time, body, ...medias, link).toString();
+  return activityMessageElements(activity, includeMedia)
+    .map((element) => element.toString())
+    .join("");
+}
+
+/** 构造最近动态列表的文字节点，按传入的新到旧顺序展示。 */
+export function recentActivitiesMessageElements(
+  user: XUser,
+  activities: ReadonlyArray<XActivity>,
+): Element[] {
+  const postCount = activities.filter((activity) => activity.kind === "post").length;
+  const replyCount = activities.filter((activity) => activity.kind === "reply").length;
+  const elements = [Element("p", `${user.fullname} (@${user.username}) 最近动态：${postCount} 条推文，${replyCount} 条回复`)];
+  activities.forEach((activity, index) => {
+    elements.push(Element("br"));
+    elements.push(Element("p", `${index + 1}. ${activity.kind === "post" ? "推文" : "回复"} · ${formatActivityTime(activity.createdAt)}`));
+    elements.push(Element("p", cleanActivityText(activity.text) || "（无文字内容）"));
+    elements.push(Element("a", { href: activity.url }, "原文链接"));
+  });
+  return elements;
+}
+
+/** 格式化最近动态列表的文字输出。 */
+export function formatRecentActivitiesMessage(
+  user: XUser,
+  activities: ReadonlyArray<XActivity>,
+): string {
+  return recentActivitiesMessageElements(user, activities)
+    .map((element) => element.toString())
+    .join("");
+}
+
+/** 构造订阅列表文字节点。 */
+export function watcherListMessageElements(
+  watchers: ReadonlyArray<WatcherRecord>,
+): Element[] {
+  return [Element("p", formatWatcherListMessage(watchers))];
 }
 
 /** 格式化当前频道的订阅列表。 */

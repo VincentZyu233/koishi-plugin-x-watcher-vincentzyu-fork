@@ -681,4 +681,66 @@ describe("createRettiwtDataSource", () => {
       },
     });
   });
+
+  it("最近动态分别分页收集推文和回复并过滤引用、转推与重复项", async () => {
+    const timelineCursors: Array<string | null> = [];
+    const replyCursors: Array<string | null> = [];
+    const client = createFakeClient({
+      timeline: async (cursor) => {
+        timelineCursors.push(cursor);
+        if (cursor === null) {
+          return {
+            tweets: [
+              makeTweet("100", "2026-09-15T01:00:00.000Z", { hasQuote: true }),
+              makeTweet("400", "2026-09-15T04:00:00.000Z"),
+            ],
+            nextCursor: "posts-2",
+          };
+        }
+        return {
+          tweets: [
+            makeTweet("400", "2026-09-15T04:00:00.000Z"),
+            makeTweet("300", "2026-09-15T03:00:00.000Z", {
+              media: [{
+                kind: "video",
+                url: "https://video/300.mp4",
+                previewUrl: "https://img/300.jpg",
+              }],
+            }),
+          ],
+          nextCursor: null,
+        };
+      },
+      replies: async (cursor) => {
+        replyCursors.push(cursor);
+        return {
+          tweets: [
+            makeTweet("350", "2026-09-15T03:30:00.000Z", { replyTo: "1" }),
+            makeTweet("250", "2026-09-15T02:30:00.000Z", { replyTo: "1" }),
+          ],
+          nextCursor: null,
+        };
+      },
+    });
+    const source = createRettiwtDataSource({
+      apiKeys: ["key"],
+      createClient: () => client,
+    });
+
+    if (source.fetchRecent === undefined) throw new Error("缺少 fetchRecent");
+    const result = await source.fetchRecent(domainUser, 2);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(timelineCursors).toEqual([null, "posts-2"]);
+    expect(replyCursors).toEqual([null]);
+    expect(result.value.map((activity) => activity.id)).toEqual(["400", "350", "300", "250"]);
+    expect(result.value[2]).toMatchObject({
+      media: [{
+        kind: "video",
+        url: "https://video/300.mp4",
+        previewUrl: "https://img/300.jpg",
+      }],
+    });
+  });
 });

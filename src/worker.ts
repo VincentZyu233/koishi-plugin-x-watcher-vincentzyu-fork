@@ -1,4 +1,5 @@
 import type { Context, Logger } from "koishi";
+import type { PushActivityType } from "./config";
 import {
   canonicalHandle,
   compareSnowflake,
@@ -15,10 +16,46 @@ import {
   updateWatcherCursor,
   type WatcherRecord,
 } from "./database";
-import { formatActivityMessage } from "./message-formatter";
+import { legacyMessageOutput, type MessageOutput } from "./output";
 import type { XDataSourceService } from "./services";
 
 type ContinueDelivery = () => boolean;
+
+export interface DeliveryOptions {
+  readonly output: MessageOutput;
+  readonly activityTypes: ReadonlyArray<PushActivityType>;
+  readonly maxPostCount: number;
+  readonly maxReplyCount: number;
+}
+
+const defaultDeliveryOptions: DeliveryOptions = {
+  output: legacyMessageOutput,
+  activityTypes: ["post", "reply"],
+  maxPostCount: 0,
+  maxReplyCount: 0,
+};
+
+/** 从新到旧领取每类额度；返回集合外的旧动态仍会被消费并推进水位。 */
+function deliverableActivityIds(
+  activities: ReadonlyArray<XActivity>,
+  delivery: DeliveryOptions,
+): ReadonlySet<string> {
+  const deliverable = new Set<string>();
+  let posts = 0;
+  let replies = 0;
+  const newestFirst = [...normalizeActivityOrder(activities)].reverse();
+  for (const activity of newestFirst) {
+    if (activity.kind === "post") {
+      if (delivery.maxPostCount > 0 && posts >= delivery.maxPostCount) continue;
+      posts += 1;
+    } else if (activity.kind === "reply") {
+      if (delivery.maxReplyCount > 0 && replies >= delivery.maxReplyCount) continue;
+      replies += 1;
+    }
+    deliverable.add(activity.id);
+  }
+  return deliverable;
+}
 
 /** 普通轮询不受连接代次约束。 */
 function alwaysContinue(): boolean {
@@ -53,10 +90,11 @@ export function createDeliveryTracker(limit = 4096): DeliveryTracker {
 function isActivityEnabled(
   watcher: WatcherRecord,
   activity: XActivity,
+  activityTypes: ReadonlyArray<PushActivityType>,
 ): boolean {
   if (activity.kind === "quote") return watcher.include_quote === true;
   if (activity.kind === "retweet") return watcher.include_retweet === true;
-  return true;
+  return activityTypes.includes(activity.kind);
 }
 
 /** 获取迁移后可靠的订阅启用时间。 */
@@ -102,7 +140,9 @@ async function processWatcherActivities(
   watcher: WatcherRecord,
   activities: ReadonlyArray<XActivity>,
   canContinue: ContinueDelivery,
+  delivery: DeliveryOptions,
 ): Promise<boolean> {
+  const deliverableIds = deliverableActivityIds(activities, delivery);
   for (const activity of normalizeActivityOrder(activities)) {
     if (!canContinue()) return false;
 
@@ -124,7 +164,8 @@ async function processWatcherActivities(
     }
     const shouldSend =
       compiled.ok &&
-      isActivityEnabled(current, activity) &&
+      deliverableIds.has(activity.id) &&
+      isActivityEnabled(current, activity, delivery.activityTypes) &&
       (compiled.value === null || compiled.value.test(activity.text));
 
     if (shouldSend) {
@@ -137,7 +178,7 @@ async function processWatcherActivities(
         return false;
       }
       try {
-        const message = formatActivityMessage(activity, current.media);
+        const message = await delivery.output.activity(activity, current.media);
         await bot.sendMessage(current.channelId, message);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -227,6 +268,7 @@ async function recoverWatchers(
   tracker: DeliveryTracker,
   watchers: ReadonlyArray<WatcherRecord>,
   canContinue: ContinueDelivery,
+  delivery: DeliveryOptions,
 ): Promise<boolean> {
   const groups = groupWatchers(watchers);
   let completed = true;
@@ -279,6 +321,7 @@ async function recoverWatchers(
         current,
         fetched.value.activities,
         canContinue,
+        delivery,
       );
       if (!delivered) completed = false;
     }
@@ -297,6 +340,7 @@ export async function recoverActiveWatchers(
   logger: Logger,
   tracker: DeliveryTracker,
   canContinue: ContinueDelivery = alwaysContinue,
+  delivery: DeliveryOptions = defaultDeliveryOptions,
 ): Promise<boolean> {
   const watchers = await getActiveWatchers(ctx);
   return recoverWatchers(
@@ -306,6 +350,7 @@ export async function recoverActiveWatchers(
     tracker,
     watchers,
     canContinue,
+    delivery,
   );
 }
 
@@ -317,6 +362,7 @@ export async function recoverActiveHandles(
   tracker: DeliveryTracker,
   handles: ReadonlySet<string>,
   canContinue: ContinueDelivery = alwaysContinue,
+  delivery: DeliveryOptions = defaultDeliveryOptions,
 ): Promise<boolean> {
   const watchers = await getActiveWatchers(ctx);
   const matching = watchers.filter((watcher) =>
@@ -329,6 +375,7 @@ export async function recoverActiveHandles(
     tracker,
     matching,
     canContinue,
+    delivery,
   );
 }
 
@@ -339,6 +386,7 @@ export async function routeLiveActivities(
   tracker: DeliveryTracker,
   activities: ReadonlyArray<XActivity>,
   canContinue: ContinueDelivery = alwaysContinue,
+  delivery: DeliveryOptions = defaultDeliveryOptions,
 ): Promise<boolean> {
   if (!canContinue()) return false;
   const watchers = await getActiveWatchers(ctx);
@@ -357,6 +405,7 @@ export async function routeLiveActivities(
       watcher,
       matching,
       canContinue,
+      delivery,
     );
     if (!delivered) completed = false;
   }
@@ -370,6 +419,7 @@ export function createPollingRunner(
   logger: Logger,
   tracker: DeliveryTracker,
   canContinue: ContinueDelivery = alwaysContinue,
+  delivery: DeliveryOptions = defaultDeliveryOptions,
 ): () => Promise<void> {
   let running = false;
   return async () => {
@@ -386,6 +436,7 @@ export function createPollingRunner(
         logger,
         tracker,
         canContinue,
+        delivery,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

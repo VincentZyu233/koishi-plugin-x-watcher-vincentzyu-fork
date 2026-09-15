@@ -13,6 +13,7 @@ import {
   recoverActiveHandles,
   recoverActiveWatchers,
   routeLiveActivities,
+  type DeliveryOptions,
   type DeliveryTracker,
 } from "./worker";
 
@@ -64,6 +65,7 @@ export function createPollingRuntime(
   logger: Logger,
   intervalMinutes: number,
   tracker: DeliveryTracker = createDeliveryTracker(),
+  delivery?: DeliveryOptions,
 ): PollingPluginRuntime {
   let cancelInterval: (() => void) | null = null;
   let disposed = false;
@@ -73,6 +75,7 @@ export function createPollingRuntime(
     logger,
     tracker,
     () => !disposed,
+    delivery,
   );
 
   return {
@@ -196,6 +199,7 @@ export function createAccountStreamRuntime(
   logger: Logger,
   intervalMinutes: number,
   tracker: DeliveryTracker = createDeliveryTracker(),
+  delivery?: DeliveryOptions,
 ): AccountStreamPluginRuntime {
   const state: StreamState = {
     disposed: false,
@@ -308,6 +312,7 @@ export function createAccountStreamRuntime(
               logger,
               tracker,
               isCurrent,
+              delivery,
             )
           : await recoverActiveHandles(
               ctx,
@@ -316,6 +321,7 @@ export function createAccountStreamRuntime(
               tracker,
               stableHandles,
               isCurrent,
+              delivery,
             );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -340,6 +346,7 @@ export function createAccountStreamRuntime(
         tracker,
         buffered,
         isCurrent,
+        delivery,
       );
       if (!isCurrent()) return false;
       if (!delivered) closeForRetry(sequence, "buffer delivery failed");
@@ -383,6 +390,7 @@ export function createAccountStreamRuntime(
         tracker,
         activities,
         isCurrent,
+        delivery,
       );
       if (!isCurrent()) return false;
       if (!delivered) closeForRetry(sequence, "live delivery failed");

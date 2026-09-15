@@ -21,6 +21,14 @@ export interface XDataSourceService {
     cursor: ActivityCursor,
     until: Date,
   ) => Promise<Result<ActivityBatch, SourceError>>;
+  readonly fetchLatest?: (
+    user: XUser,
+    kind: "post" | "reply",
+  ) => Promise<Result<XActivity | null, SourceError>>;
+  readonly fetchRecent?: (
+    user: XUser,
+    count: number,
+  ) => Promise<Result<ReadonlyArray<XActivity>, SourceError>>;
 }
 
 /** TwitterAPI.io Account Stream 的远端状态。 */

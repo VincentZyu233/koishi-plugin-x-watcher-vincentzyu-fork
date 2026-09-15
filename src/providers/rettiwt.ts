@@ -43,12 +43,14 @@ export interface RettiwtUserData {
   readonly id: string;
   readonly username: string;
   readonly fullname: string;
+  readonly avatarUrl?: string;
 }
 
 /** Rettiwt SDK 与领域模型之间的最小媒体结构。 */
 export interface RettiwtMediaData {
   readonly kind: "image" | "gif" | "video";
   readonly url: string;
+  readonly previewUrl?: string;
 }
 
 /** Rettiwt SDK 与领域模型之间的最小动态结构。 */
@@ -57,6 +59,7 @@ export interface RettiwtTweetData {
   readonly authorId: string;
   readonly username: string;
   readonly fullname: string;
+  readonly avatarUrl?: string;
   readonly text: string;
   readonly createdAt: string;
   readonly url: string;
@@ -166,13 +169,16 @@ function mapSdkMedia(tweet: Tweet): ReadonlyArray<RettiwtMediaData> {
   return media
     .filter((media) => media.url.length > 0)
     .map((media) => {
+      const preview = media.thumbnailUrl === undefined || media.thumbnailUrl.length === 0
+        ? {}
+        : { previewUrl: media.thumbnailUrl };
       if (media.type === MediaType.PHOTO) {
-        return { kind: "image", url: media.url };
+        return { kind: "image", url: media.url, ...preview };
       }
       if (media.type === MediaType.GIF) {
-        return { kind: "gif", url: media.url };
+        return { kind: "gif", url: media.url, ...preview };
       }
-      return { kind: "video", url: media.url };
+      return { kind: "video", url: media.url, ...preview };
     });
 }
 
@@ -183,6 +189,7 @@ function mapSdkTweet(tweet: Tweet): RettiwtTweetData {
     authorId: tweet.tweetBy.id,
     username: tweet.tweetBy.userName,
     fullname: tweet.tweetBy.fullName,
+    avatarUrl: tweet.tweetBy.profileImage,
     text: tweet.fullText,
     createdAt: tweet.createdAt,
     url: tweet.url,
@@ -198,6 +205,7 @@ function mapSdkUser(user: User): RettiwtUserData {
     id: user.id,
     username: user.userName,
     fullname: user.fullName,
+    avatarUrl: user.profileImage,
   };
 }
 
@@ -560,7 +568,13 @@ function mapMedia(
 ): ReadonlyArray<XMedia> {
   return media
     .filter((item) => item.url.length > 0)
-    .map((item) => ({ kind: item.kind, url: item.url }));
+    .map((item) => ({
+      kind: item.kind,
+      url: item.url,
+      ...(item.previewUrl === undefined || item.previewUrl.length === 0
+        ? {}
+        : { previewUrl: item.previewUrl }),
+    }));
 }
 
 /** 四种动态按转推、引用、回复、原创的互斥顺序判定。 */
@@ -582,6 +596,9 @@ function mapActivity(tweet: RettiwtTweetData): XActivity | null {
     authorId: tweet.authorId,
     username: tweet.username,
     fullname: tweet.fullname,
+    ...(tweet.avatarUrl === undefined || tweet.avatarUrl.length === 0
+      ? {}
+      : { avatarUrl: tweet.avatarUrl }),
     kind,
     text: tweet.text,
     createdAt,
@@ -723,6 +740,44 @@ async function collectTimeline(
   }
 }
 
+/** 为即时批量查询分页收集一种动态；达到数量后即可停止，不涉及持久化水位。 */
+async function collectRecentTimeline(
+  runWithToken: RunWithToken,
+  timeline: TimelineName,
+  user: XUser,
+  kind: "post" | "reply",
+  count: number,
+): Promise<Result<ReadonlyArray<XActivity>, SourceError>> {
+  const activities: XActivity[] = [];
+  const seenIds = new Set<string>();
+  const visitedCursors = new Set<string>();
+  let nextCursor: string | null = null;
+
+  while (activities.length < count) {
+    const page = await readPage(runWithToken, timeline, user.id, nextCursor);
+    if (!page.ok) return page;
+    for (const tweet of page.value.tweets) {
+      if (!isTargetTweet(tweet, user)) continue;
+      const activity = mapActivity(tweet);
+      if (activity === null || activity.kind !== kind || seenIds.has(activity.id)) continue;
+      seenIds.add(activity.id);
+      activities.push(activity);
+    }
+    const followingCursor = page.value.nextCursor;
+    if (followingCursor === null) break;
+    if (page.value.tweets.length === 0 && followingCursor === nextCursor) break;
+    if (visitedCursors.has(followingCursor)) {
+      return failure(sourceError("rettiwt", "decode", "Rettiwt 返回了重复的分页游标"));
+    }
+    visitedCursors.add(followingCursor);
+    nextCursor = followingCursor;
+  }
+
+  return success(activities
+    .sort((left, right) => compareSnowflake(right.id, left.id))
+    .slice(0, count));
+}
+
 /** 取首屏时间线与回复中的最大 Snowflake，建立不补历史的初始水位。 */
 async function fetchNewestBaseline(
   runWithToken: RunWithToken,
@@ -787,6 +842,9 @@ export function createRettiwtDataSource(
         id: result.value.id,
         username: result.value.username,
         fullname: result.value.fullname,
+        ...(result.value.avatarUrl === undefined || result.value.avatarUrl.length === 0
+          ? {}
+          : { avatarUrl: result.value.avatarUrl }),
       });
     },
     fetchBaseline: (user) => fetchNewestBaseline(runWithToken, user),
@@ -818,6 +876,50 @@ export function createRettiwtDataSource(
         newestId: newestActivityId(activities),
       };
       return success(batch);
+    },
+    fetchLatest: async (user, kind) => {
+      const page = await readPage(
+        runWithToken,
+        kind === "reply" ? "replies" : "timeline",
+        user.id,
+        null,
+      );
+      if (!page.ok) return page;
+      const matches = page.value.tweets
+        .filter((tweet) => isTargetTweet(tweet, user))
+        .map(mapActivity)
+        .filter((activity): activity is XActivity =>
+          activity !== null && activity.kind === kind
+        );
+      let latest: XActivity | null = null;
+      for (const activity of matches) {
+        if (latest === null || compareSnowflake(activity.id, latest.id) > 0) {
+          latest = activity;
+        }
+      }
+      return success(latest);
+    },
+    fetchRecent: async (user, count) => {
+      const posts = await collectRecentTimeline(
+        runWithToken,
+        "timeline",
+        user,
+        "post",
+        count,
+      );
+      if (!posts.ok) return posts;
+      const replies = await collectRecentTimeline(
+        runWithToken,
+        "replies",
+        user,
+        "reply",
+        count,
+      );
+      if (!replies.ok) return replies;
+      const deduplicated = normalizeActivityOrder([...posts.value, ...replies.value]);
+      return success([...deduplicated].sort(
+        (left, right) => compareSnowflake(right.id, left.id),
+      ));
     },
   };
 }

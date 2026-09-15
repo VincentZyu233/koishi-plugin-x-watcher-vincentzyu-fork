@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  canonicalHandle,
   compareSnowflake,
   failure,
   newestActivityId,
@@ -32,7 +33,14 @@ const userSchema = z.object({
   id: snowflakeSchema,
   userName: handleSchema,
   name: z.string(),
+  profilePicture: z.string().url().optional(),
+  profileImage: z.string().url().optional(),
+  profile_image_url: z.string().url().optional(),
 });
+
+function userAvatar(user: z.output<typeof userSchema>): string | undefined {
+  return user.profilePicture ?? user.profileImage ?? user.profile_image_url;
+}
 
 const userResponseSchema = z.object({
   data: userSchema,
@@ -156,10 +164,12 @@ export function decodeTwitterApiUser(
     ));
   }
 
+  const avatarUrl = userAvatar(decoded.data.data);
   return success({
     id: decoded.data.data.id,
     username: decoded.data.data.userName,
     fullname: decoded.data.data.name,
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
   });
 }
 
@@ -179,17 +189,21 @@ export function decodeTwitterApiActivityPage(
     ));
   }
 
-  const activities = decoded.data.tweets.map((tweet) => ({
-    id: tweet.id,
-    authorId: tweet.author.id,
-    username: tweet.author.userName,
-    fullname: tweet.author.name,
-    kind: resolveActivityKind(tweet),
-    text: tweet.text,
-    createdAt: tweet.createdAt,
-    url: tweet.url,
-    media: normalizeMedia(tweet),
-  }));
+  const activities = decoded.data.tweets.map((tweet) => {
+    const avatarUrl = userAvatar(tweet.author);
+    return {
+      id: tweet.id,
+      authorId: tweet.author.id,
+      username: tweet.author.userName,
+      fullname: tweet.author.name,
+      ...(avatarUrl === undefined ? {} : { avatarUrl }),
+      kind: resolveActivityKind(tweet),
+      text: tweet.text,
+      createdAt: tweet.createdAt,
+      url: tweet.url,
+      media: normalizeMedia(tweet),
+    };
+  });
 
   return success({
     activities,
@@ -279,7 +293,13 @@ function appendMedia(
 
   if (url === undefined || url === null || seen.has(url)) return;
   seen.add(url);
-  output.push({ kind, url });
+  output.push({
+    kind,
+    url,
+    ...(preview === undefined || preview === null || preview.length === 0
+      ? {}
+      : { previewUrl: preview }),
+  });
 }
 
 function selectVideoVariant(
@@ -645,10 +665,91 @@ export function createTwitterApiDataSource(
     });
   };
 
+  const fetchLatest = async (
+    user: XUser,
+    kind: "post" | "reply",
+  ): Promise<Result<XActivity | null, SourceError>> => {
+    const response = await requestText(
+      ctx,
+      apiKey,
+      LAST_TWEETS_PATH,
+      { userId: user.id, includeReplies: true },
+    );
+    if (!response.ok) return response;
+    const page = decodeTwitterApiActivityPage(response.value.text);
+    if (!page.ok) return page;
+    const matches = page.value.activities
+      .filter((activity) => activity.kind === kind)
+      .sort((left, right) => compareSnowflake(right.id, left.id));
+    return success(matches[0] ?? null);
+  };
+
+  const fetchRecent = async (
+    user: XUser,
+    count: number,
+  ): Promise<Result<ReadonlyArray<XActivity>, SourceError>> => {
+    const collected: XActivity[] = [];
+    const seenIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let nextCursor = "";
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      const postCount = collected.filter((activity) => activity.kind === "post").length;
+      const replyCount = collected.filter((activity) => activity.kind === "reply").length;
+      if (postCount >= count && replyCount >= count) break;
+      const params = nextCursor.length === 0
+        ? { userId: user.id, includeReplies: true }
+        : { userId: user.id, includeReplies: true, cursor: nextCursor };
+      const response = await requestText(ctx, apiKey, LAST_TWEETS_PATH, params);
+      if (!response.ok) return response;
+      const page = decodeTwitterApiActivityPage(response.value.text);
+      if (!page.ok) return page;
+      for (const activity of page.value.activities) {
+        if (
+          (activity.kind !== "post" && activity.kind !== "reply")
+          || (activity.authorId !== user.id
+            && canonicalHandle(activity.username) !== canonicalHandle(user.username))
+          || seenIds.has(activity.id)
+        ) {
+          continue;
+        }
+        seenIds.add(activity.id);
+        collected.push(activity);
+      }
+      hasNextPage = page.value.hasNextPage;
+      if (!hasNextPage) break;
+      const receivedCursor = page.value.nextCursor;
+      if (receivedCursor.length === 0 || seenCursors.has(receivedCursor)) {
+        return failure(sourceError(
+          "twitterapiio",
+          "decode",
+          "TwitterAPI.io 返回了无效的分页游标",
+        ));
+      }
+      seenCursors.add(receivedCursor);
+      nextCursor = receivedCursor;
+    }
+
+    const posts = collected
+      .filter((activity) => activity.kind === "post")
+      .sort((left, right) => compareSnowflake(right.id, left.id))
+      .slice(0, count);
+    const replies = collected
+      .filter((activity) => activity.kind === "reply")
+      .sort((left, right) => compareSnowflake(right.id, left.id))
+      .slice(0, count);
+    return success([...posts, ...replies].sort(
+      (left, right) => compareSnowflake(right.id, left.id),
+    ));
+  };
+
   return {
     provider: "twitterapiio",
     resolveUser,
     fetchBaseline,
     fetchAfter,
+    fetchLatest,
+    fetchRecent,
   };
 }

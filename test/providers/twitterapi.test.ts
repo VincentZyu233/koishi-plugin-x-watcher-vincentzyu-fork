@@ -516,4 +516,51 @@ describe("TwitterAPI.io 数据源", () => {
     if (!result.ok) expect(result.error.kind).toBe("decode");
     expect(harness.requests).toHaveLength(1);
   });
+
+  it("最近动态沿 last_tweets 游标分页并分别限制推文和回复", async () => {
+    const firstPost = { ...tweetFixture("400", new Date("2026-09-15T04:00:00.000Z")), type: "tweet" };
+    const firstReply = { ...tweetFixture("350", new Date("2026-09-15T03:30:00.000Z")), type: "reply" };
+    const videoPost = {
+      ...tweetFixture("300", new Date("2026-09-15T03:00:00.000Z")),
+      type: "tweet",
+      media: [{
+        type: "video",
+        media_url_https: "https://img/video.jpg",
+        variants: [{ url: "https://video/low.mp4", bitrate: 128 }, { url: "https://video/high.mp4", bitrate: 256 }],
+      }],
+    };
+    const secondReply = { ...tweetFixture("250", new Date("2026-09-15T02:30:00.000Z")), type: "reply" };
+    const harness = await createHttpHarness([
+      jsonResponse({
+        tweets: [firstPost, firstReply],
+        has_next_page: true,
+        next_cursor: "recent-2",
+      }),
+      jsonResponse({
+        tweets: [firstPost, videoPost, secondReply],
+        has_next_page: false,
+        next_cursor: "",
+      }),
+    ]);
+    const source = createTwitterApiDataSource(harness.ctx, "secret-key");
+
+    if (source.fetchRecent === undefined) throw new Error("缺少 fetchRecent");
+    const result = await source.fetchRecent(
+      { id: "100", username: "Example", fullname: "示例用户" },
+      2,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((activity) => activity.id)).toEqual(["400", "350", "300", "250"]);
+    expect(result.value[2]).toMatchObject({
+      media: [{
+        kind: "video",
+        url: "https://video/high.mp4",
+        previewUrl: "https://img/video.jpg",
+      }],
+    });
+    expect(harness.requests).toHaveLength(2);
+    expect(new URL(requestAt(harness.requests, 1).url).searchParams.get("cursor")).toBe("recent-2");
+  });
 });

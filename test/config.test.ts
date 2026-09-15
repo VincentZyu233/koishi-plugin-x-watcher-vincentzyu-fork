@@ -66,6 +66,16 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key-a", "key-b"],
       interval: 5,
+      outputFormats: ["image", "text"],
+      fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
+      activityTypes: ["post", "reply"],
+      maxPostCount: 10,
+      maxReplyCount: 10,
+      latestDefaultUsername: "amsrntk3",
+      recentDefaultUsername: "OpenAI",
+      recentDefaultCount: 10,
+      enableQuote: true,
+      enableWaitingHint: true,
       proxy: {
         enabled: false,
         url: "http://127.0.0.1:7890",
@@ -79,15 +89,47 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key"],
       interval: 2,
+      outputFormats: ["image", "text"],
+      fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
+      activityTypes: ["reply"],
+      maxPostCount: 3,
+      maxReplyCount: -1,
+      latestDefaultUsername: "amsrntk3",
+      recentDefaultUsername: "OpenAI",
+      recentDefaultCount: 10,
+      enableQuote: true,
+      enableWaitingHint: false,
     })).toEqual({
       provider: "rettiwt",
       mode: "polling",
       apiKeys: ["key"],
       interval: 2,
+      outputFormats: ["image", "text"],
+      fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
+      activityTypes: ["reply"],
+      maxPostCount: 3,
+      maxReplyCount: -1,
+      latestDefaultUsername: "amsrntk3",
+      recentDefaultUsername: "OpenAI",
+      recentDefaultCount: 10,
+      enableQuote: true,
+      enableWaitingHint: false,
       proxy: {
         enabled: false,
         url: "http://127.0.0.1:7890",
       },
+    });
+  });
+
+  it("限制 xrecent 默认每类数量为 1～50 的整数", () => {
+    for (const recentDefaultCount of [0, -1, 1.5, 51]) {
+      expect(() => decodeConfig({
+        apiKeys: ["key"],
+        recentDefaultCount,
+      })).toThrow();
+    }
+    expect(Config({ apiKeys: ["key"], recentDefaultCount: 50 })).toMatchObject({
+      recentDefaultCount: 50,
     });
   });
 

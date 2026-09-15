@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { extendWatcherTable, type WatcherRecord } from "../src/database";
 import { success, type XActivity } from "../src/domain";
 import type { XDataSourceService } from "../src/services";
+import { legacyMessageOutput } from "../src/output";
 import {
   createDeliveryTracker,
   createPollingRunner,
@@ -201,6 +202,38 @@ describe("动态 worker", () => {
     expect(completed).toBe(false);
     const rows = await ctx.database.get("x_watcher", {});
     expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("200");
+  });
+
+  it("补漏只发送每类最新额度且仍推进到最新水位", async () => {
+    const { ctx, bot } = await createEnvironment();
+    await createWatcher(ctx, { include_quote: true, include_retweet: true });
+    const completed = await recoverActiveWatchers(
+      ctx,
+      createSource([
+        activity("101", "post", "old post"),
+        activity("102", "reply", "old reply"),
+        activity("103", "post", "newer post"),
+        activity("104", "reply", "new reply"),
+        activity("105", "post", "newest post"),
+      ]),
+      new Logger("worker-test"),
+      createDeliveryTracker(),
+      () => true,
+      {
+        output: legacyMessageOutput,
+        activityTypes: ["post", "reply"],
+        maxPostCount: 2,
+        maxReplyCount: 1,
+      },
+    );
+
+    expect(completed).toBe(true);
+    expect(bot.messages.map((message) => message.content)).toHaveLength(3);
+    expect(bot.messages.map((message) => message.content).join("\n")).not.toContain("old post");
+    expect(bot.messages.map((message) => message.content).join("\n")).not.toContain("old reply");
+    expect(bot.messages.map((message) => message.content).join("\n")).toContain("newest post");
+    const rows = await ctx.database.get("x_watcher", {});
+    expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("105");
   });
 
   it("混合空水位时使用所有订阅中最早的真实边界", async () => {

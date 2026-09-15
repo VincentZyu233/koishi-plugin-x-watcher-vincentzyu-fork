@@ -32,6 +32,7 @@ export type ActivityKind = "post" | "reply" | "quote" | "retweet";
 export interface XMedia {
   readonly kind: "image" | "gif" | "video";
   readonly url: string;
+  readonly previewUrl?: string;
 }
 
 /** 与供应商无关的 X 用户资料。 */
@@ -39,6 +40,7 @@ export interface XUser {
   readonly id: string;
   readonly username: string;
   readonly fullname: string;
+  readonly avatarUrl?: string;
 }
 
 /** 与供应商无关的 X 动态。 */
@@ -47,6 +49,7 @@ export interface XActivity {
   readonly authorId: string;
   readonly username: string;
   readonly fullname: string;
+  readonly avatarUrl?: string;
   readonly kind: ActivityKind;
   readonly text: string;
   readonly createdAt: Date;

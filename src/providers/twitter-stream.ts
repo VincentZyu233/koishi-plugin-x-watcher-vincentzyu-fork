@@ -131,6 +131,7 @@ const FastTweetSchema = z.object({
   type: z.string(),
   created_ms: z.number().int().nonnegative(),
   media: z.array(z.string().url()).nullable().optional(),
+  profile_image_url: z.string().url().optional(),
 });
 
 const FastTweetEventSchema = z.object({
@@ -144,11 +145,15 @@ const StandardAuthorSchema = z.union([
     id: z.string().min(1),
     name: z.string(),
     userName: z.string().regex(/^[A-Za-z0-9_]{1,15}$/),
+    profilePicture: z.string().url().optional(),
+    profileImage: z.string().url().optional(),
   }),
   z.object({
     id: z.string().min(1),
     name: z.string(),
     username: z.string().regex(/^[A-Za-z0-9_]{1,15}$/),
+    profilePicture: z.string().url().optional(),
+    profileImage: z.string().url().optional(),
   }),
 ]);
 
@@ -385,6 +390,9 @@ function fastActivity(tweet: FastTweet, kind: ActivityKind): XActivity {
     authorId,
     username: tweet.screen_name,
     fullname,
+    ...(tweet.profile_image_url === undefined
+      ? {}
+      : { avatarUrl: tweet.profile_image_url }),
     kind,
     text: tweet.text,
     createdAt: new Date(tweet.created_ms),
@@ -425,11 +433,13 @@ function standardActivityKind(tweet: StandardTweet): ActivityKind {
 function standardActivity(tweet: StandardTweet): XActivity {
   const username = standardAuthorHandle(tweet.author);
   const fallbackUrl = `https://x.com/${username}/status/${tweet.id}`;
+  const avatarUrl = tweet.author.profilePicture ?? tweet.author.profileImage;
   return {
     id: tweet.id,
     authorId: tweet.author.id,
     username,
     fullname: tweet.author.name,
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
     kind: standardActivityKind(tweet),
     text: tweet.text,
     createdAt: new Date(tweet.createdAt),

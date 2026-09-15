@@ -6,10 +6,12 @@ import { createRettiwtDataSource } from "./providers/rettiwt";
 import { createTwitterAccountStreamService } from "./providers/twitter-stream";
 import { createTwitterApiDataSource } from "./providers/twitterapi";
 import { installProxy } from "./proxy";
+import { createMessageOutput, legacyMessageOutput, type MessageOutput } from "./output";
+import { createTakumiRenderer } from "./render/takumi";
 import { createAccountStreamRuntime, createPollingRuntime, type PluginRuntime } from "./runtime";
 
 export const name = "x-watcher";
-export const inject = { required: ["database", "http"] };
+export const inject = { required: ["database", "http"], optional: ["ffmpeg"] };
 export { Config };
 
 export const usage = `
@@ -24,9 +26,11 @@ export const usage = `
 6. 输出的字符串即为你的 API_KEY。
 
 ### 如何使用
-- 使用 \`watch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
-- 使用 \`unwatch <username>\` 软取消
+- 使用 \`xwatch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
+- 使用 \`xun <username>\` 或 \`xunwatch <username>\` 软取消
 - 使用 \`xlist\` 查看当前频道订阅。
+- 使用 \`xlatest [username] [-t post|reply]\` 即时获取指定用户的最新推文或回复；省略用户名时查询配置的默认账号。
+- 使用 \`xrecent [username] [-c count]\` 获取指定用户最近的推文和回复；数量表示每类各取 N 条。
 
 在哪里使用 watch 命令，推文的更新就会发送到哪里
 
@@ -38,13 +42,28 @@ export const usage = `
 const logger = new Logger("x-watcher");
 
 /** 从判别运行时生成命令依赖，保持 mode 与 monitor 能力一致。 */
-function commandDependencies(runtime: PluginRuntime, interval: number) {
+function commandDependencies(
+  runtime: PluginRuntime,
+  interval: number,
+  output: MessageOutput,
+  latestDefaultUsername: string,
+  recentDefaultUsername: string,
+  recentDefaultCount: number,
+  enableQuote: boolean,
+  enableWaitingHint: boolean,
+) {
   if (runtime.mode === "polling") {
     return {
       source: runtime.source,
       interval,
       mode: runtime.mode,
       synchronizeMonitors: runtime.synchronizeMonitors,
+      output,
+      latestDefaultUsername,
+      recentDefaultUsername,
+      recentDefaultCount,
+      enableQuote,
+      enableWaitingHint,
     };
   }
   return {
@@ -52,6 +71,12 @@ function commandDependencies(runtime: PluginRuntime, interval: number) {
     interval,
     mode: runtime.mode,
     synchronizeMonitors: runtime.synchronizeMonitors,
+    output,
+    latestDefaultUsername,
+    recentDefaultUsername,
+    recentDefaultCount,
+    enableQuote,
+    enableWaitingHint,
   };
 }
 
@@ -60,28 +85,40 @@ function createRuntime(
   ctx: Context,
   config: PluginConfig,
   rettiwtProxy: string | undefined,
+  output: MessageOutput,
 ): PluginRuntime {
+  const delivery = {
+    output,
+    activityTypes: config.activityTypes ?? ["post", "reply"],
+    maxPostCount: config.maxPostCount ?? 10,
+    maxReplyCount: config.maxReplyCount ?? 10,
+  };
   if (config.provider === "rettiwt") {
     const source = createRettiwtDataSource({
       apiKeys: config.apiKeys,
       logger,
       ...(rettiwtProxy === undefined ? {} : { proxy: rettiwtProxy }),
     });
-    return createPollingRuntime(ctx, source, logger, config.interval);
+    return createPollingRuntime(ctx, source, logger, config.interval, undefined, delivery);
   }
 
   const source = createTwitterApiDataSource(ctx, config.apiKey);
   if (config.mode === "polling") {
-    return createPollingRuntime(ctx, source, logger, config.interval);
+    return createPollingRuntime(ctx, source, logger, config.interval, undefined, delivery);
   }
   const stream = createTwitterAccountStreamService(ctx, config.apiKey);
-  return createAccountStreamRuntime(ctx, source, stream, logger, config.interval);
+  return createAccountStreamRuntime(
+    ctx,
+    source,
+    stream,
+    logger,
+    config.interval,
+    undefined,
+    delivery,
+  );
 }
 
-/**
- * 表结构先交给 Koishi 同步，旧数据回填则延迟到 ready。
- * 只有迁移完整成功后才注册命令和 worker，避免半迁移状态继续写入。
- */
+/** 表结构和命令同步注册，迁移与 worker 启动延迟到 ready。 */
 export function apply(ctx: Context, config: PluginConfig): void {
   try {
     extendWatcherTable(ctx);
@@ -91,38 +128,69 @@ export function apply(ctx: Context, config: PluginConfig): void {
     return;
   }
 
+  let disposed = false;
+  let runtime: PluginRuntime | null = null;
+  let disposeProxy: () => void = () => undefined;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (runtime !== null) runtime.dispose();
+    disposeProxy();
+  };
+  ctx.on("dispose", () => {
+    dispose();
+  });
+
+  try {
+    const proxy = config.provider === "rettiwt"
+      ? installProxy(config.proxy, logger)
+      : { rettiwtProxy: undefined, dispose: () => undefined };
+    disposeProxy = proxy.dispose;
+    const outputFormats = config.outputFormats ?? ["image", "text"];
+    const output = outputFormats.includes("image")
+      ? createMessageOutput(
+        outputFormats,
+        createTakumiRenderer(ctx, logger),
+        logger,
+      )
+      : legacyMessageOutput;
+    runtime = createRuntime(ctx, config, proxy.rettiwtProxy, output);
+    registerCommands(
+      ctx,
+      commandDependencies(
+        runtime,
+        config.interval,
+        output,
+        config.latestDefaultUsername ?? "amsrntk3",
+        config.recentDefaultUsername ?? "OpenAI",
+        config.recentDefaultCount ?? 10,
+        config.enableQuote ?? true,
+        config.enableWaitingHint ?? true,
+      ),
+      logger,
+    );
+  } catch (error) {
+    dispose();
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`初始化 x-watcher 失败：${message}`);
+    return;
+  }
+
   ctx.on("ready", async () => {
     const migrated = await migrateWatcherTable(ctx);
+    if (disposed) return;
     if (!migrated.ok) {
       logger.error(`迁移 x_watcher 表失败：${migrated.error}`);
       return;
     }
-
-    let disposeProxy: () => void = () => undefined;
+    if (runtime === null) return;
     try {
-      const proxy = config.provider === "rettiwt"
-        ? installProxy(config.proxy, logger)
-        : { rettiwtProxy: undefined, dispose: () => undefined };
-      disposeProxy = proxy.dispose;
-      const runtime = createRuntime(ctx, config, proxy.rettiwtProxy);
-      let disposed = false;
-      const dispose = () => {
-        if (disposed) return;
-        disposed = true;
-        runtime.dispose();
-        proxy.dispose();
-      };
-      ctx.on("dispose", dispose);
-      try {
-        await runtime.start();
-        registerCommands(ctx, commandDependencies(runtime, config.interval), logger);
-      } catch (error) {
-        dispose();
-        throw error;
-      }
+      await runtime.start();
+      if (disposed) return;
       logger.info(`x-watcher 已启动：${config.provider}/${config.mode}`);
     } catch (error) {
-      disposeProxy();
+      runtime.dispose();
+      if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`启动 x-watcher 失败：${message}`);
     }
