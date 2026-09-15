@@ -3,7 +3,7 @@ import { registerCommands } from "./commands";
 import { Config, type Config as PluginConfig } from "./config";
 import { extendWatcherTable, migrateWatcherTable } from "./database";
 import { createRettiwtDataSource } from "./providers/rettiwt";
-import { createTwitterAccountStreamService } from "./providers/twitter-stream";
+import { createTwitterAccountStreamService } from "./providers/stream";
 import { createTwitterApiDataSource } from "./providers/twitterapi";
 import { installProxy } from "./proxy";
 import { createMessageOutput, legacyMessageOutput, type MessageOutput } from "./output";

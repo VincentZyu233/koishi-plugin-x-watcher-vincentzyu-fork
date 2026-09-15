@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { container, image, text, type Node } from "@takumi-rs/helpers";
 import type { Renderer as TakumiRendererInstance } from "@takumi-rs/wasm/node";
 import type { Context, Logger } from "koishi";
-import type {} from "koishi-plugin-ffmpeg-path";
 import { FONT_ASSET_PATH_RELATIVE_TO_BASE_DIR } from "../config";
 import type { XActivity, XMedia, XUser } from "../domain";
 import type { WatcherRecord } from "../database";
@@ -14,6 +13,20 @@ const nodeRequire = createRequire(
   typeof __filename === "string" ? __filename : join(process.cwd(), "index.js"),
 );
 const takumiModule: typeof import("@takumi-rs/wasm/node") = nodeRequire("@takumi-rs/wasm/node");
+
+interface FfmpegBuilder {
+  readonly input: (data: Buffer) => FfmpegBuilder;
+  readonly outputOption: (...options: string[]) => FfmpegBuilder;
+  readonly run: (type: "buffer") => Promise<Buffer>;
+}
+
+interface FfmpegService {
+  readonly builder: () => FfmpegBuilder;
+}
+
+function getFfmpegService(ctx: Context): FfmpegService | undefined {
+  return Reflect.get(ctx, "ffmpeg");
+}
 
 const palette = {
   background: "#ffffff",
@@ -351,12 +364,13 @@ export function createTakumiRenderer(ctx: Context, logger: Logger): TakumiRender
 
   const frameCache = new Map<string, Promise<Uint8Array | null>>();
   const extractFirstFrame = (
+    ffmpeg: FfmpegService,
     url: string,
     data: Uint8Array,
   ): Promise<Uint8Array | null> => {
     const cached = frameCache.get(url);
     if (cached !== undefined) return cached;
-    const pending = ctx.ffmpeg.builder()
+    const pending = ffmpeg.builder()
       .input(Buffer.from(data))
       .outputOption("-frames:v", "1", "-f", "image2pipe", "-vcodec", "png")
       .run("buffer")
@@ -379,7 +393,8 @@ export function createTakumiRenderer(ctx: Context, logger: Logger): TakumiRender
     if (media.kind === "image") {
       return { media, data: null, failureLabel: "图片加载失败" };
     }
-    if (ctx.ffmpeg === undefined) {
+    const ffmpeg = getFfmpegService(ctx);
+    if (ffmpeg === undefined) {
       return {
         media,
         data: null,
@@ -390,7 +405,7 @@ export function createTakumiRenderer(ctx: Context, logger: Logger): TakumiRender
     if (source === null) {
       return { media, data: null, failureLabel: `${kindLabel}媒体下载失败` };
     }
-    const frame = await extractFirstFrame(media.url, source);
+    const frame = await extractFirstFrame(ffmpeg, media.url, source);
     return {
       media,
       data: frame,

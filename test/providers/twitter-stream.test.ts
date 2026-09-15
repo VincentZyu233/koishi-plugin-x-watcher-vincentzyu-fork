@@ -10,13 +10,13 @@ import type { StreamHandlers } from "../../src/services";
 import {
   createTwitterAccountStreamServiceWithTransport,
   decodeTwitterStreamFrame,
-} from "../../src/providers/twitter-stream";
+} from "../../src/providers/stream";
 import type {
   TwitterStreamHttpResponse,
   TwitterStreamSocketHandlers,
   TwitterStreamTransport,
   TwitterStreamTransportSocket,
-} from "../../src/providers/twitter-stream";
+} from "../../src/providers/stream";
 
 interface RecordedRequest {
   readonly method: "GET" | "POST";

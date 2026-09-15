@@ -10,7 +10,7 @@ import {
   formatWatcherListMessage,
   recentActivitiesMessageElements,
   watcherListMessageElements,
-} from "./message-formatter";
+} from "./formatter";
 import type { TakumiRenderer } from "./render/takumi";
 
 export interface MessageOutput {
