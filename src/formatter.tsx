@@ -16,6 +16,15 @@ function activityAction(activity: XActivity): string {
   }
 }
 
+function activityEmoji(activity: XActivity): string {
+  switch (activity.kind) {
+    case "post": return "📝";
+    case "reply": return "💬";
+    case "quote": return "💭";
+    case "retweet": return "🔁";
+  }
+}
+
 /** 将动态时间固定格式化为上海时区。 */
 function formatActivityTime(date: Date): string {
   return date.toLocaleString("zh-CN", {
@@ -42,7 +51,7 @@ function escapeTableCell(value: string): string {
 /** 纯文字先拼接再转义，正文中的标签不会变成消息元素。 */
 export function formatActivityMessage(activity: XActivity): string {
   return Element.text([
-    `${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`,
+    `${activityEmoji(activity)} ${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`,
     `发布时间：${formatActivityTime(activity.createdAt)}`,
     cleanActivityText(activity.text) || "（无文字内容）",
     `原文链接：${activity.url}`,
@@ -53,9 +62,9 @@ export function formatRecentActivitiesMessage(user: XUser, activities: ReadonlyA
   const postCount = activities.filter((activity) => activity.kind === "post").length;
   const replyCount = activities.filter((activity) => activity.kind === "reply").length;
   return Element.text([
-    `${user.fullname} (@${user.username}) 最近动态：${postCount} 条推文，${replyCount} 条回复`,
+    `🕒 ${user.fullname} (@${user.username}) 最近动态：${postCount} 条推文，${replyCount} 条回复`,
     ...activities.map((activity, index) => [
-      `${index + 1}. ${activityAction(activity)} · ${formatActivityTime(activity.createdAt)}`,
+      `${activityEmoji(activity)} ${index + 1}. ${activityAction(activity)} · ${formatActivityTime(activity.createdAt)}`,
       cleanActivityText(activity.text) || "（无文字内容）",
       `原文链接：${activity.url}`,
     ].join("\n")),
@@ -66,7 +75,7 @@ export function formatRecentActivitiesMessage(user: XUser, activities: ReadonlyA
 export function formatWatcherListMessage(
   watchers: ReadonlyArray<WatcherRecord>,
 ): string {
-  if (watchers.length === 0) return "当前没有订阅任何 X/Twitter 用户";
+  if (watchers.length === 0) return "📋 当前没有订阅任何 X/Twitter 用户";
   const header =
     "| 订阅 | 状态 | 过滤条件 | 媒体 | 引用 | 转推 |\n" +
     "|------|------|----------|------|------|------|";
@@ -81,5 +90,5 @@ export function formatWatcherListMessage(
     const retweet = watcher.include_retweet === true ? "开启" : "关闭";
     return `| ${watcher.twitter_username} | ${status} | ${filter} | ${media} | ${quote} | ${retweet} |`;
   });
-  return Element.text(`当前订阅的 X/Twitter 用户：\n${header}\n${rows.join("\n")}`).toString();
+  return Element.text(`📋 当前订阅的 X/Twitter 用户：\n${header}\n${rows.join("\n")}`).toString();
 }

@@ -499,7 +499,7 @@ describe("公开命令契约", () => {
       ["thsottiaux"],
       { type: "quote" },
     );
-    expect(replies[0]).toBe("动态类型只支持 post 或 reply");
+    expect(replies[0]).toBe("⚠️ 动态类型只支持 post 或 reply");
     expect(calls.resolved).toBe(0);
   });
 

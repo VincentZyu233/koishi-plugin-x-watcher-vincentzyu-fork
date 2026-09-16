@@ -5,6 +5,7 @@ export type PushActivityType = "post" | "reply";
 export type WatcherAvatarRefreshMode = "cache" | "placeholder" | "always";
 export type TakumiImageFormat = "jpg" | "png" | "webp";
 export type TakumiMediaLayout = "grid-2" | "column" | "grid-3";
+export type TakumiMediaCrop = "none" | "mild" | "aggressive";
 export const FONT_ASSET_PATH_RELATIVE_TO_BASE_DIR: ReadonlyArray<string> = [
   "data",
   "fonts",
@@ -27,7 +28,7 @@ interface CommonConfig {
   readonly takumiImageQuality?: number;
   readonly takumiMediaMaxWidth?: number;
   readonly takumiMediaMaxHeight?: number;
-  readonly takumiMediaCrop?: boolean;
+  readonly takumiMediaCrop?: TakumiMediaCrop;
   readonly takumiMediaLayout?: TakumiMediaLayout;
   readonly takumiImageMaxSizeMiB?: number;
   readonly enableProxy?: boolean;
@@ -70,11 +71,11 @@ const TwitterApiKeySchema = Schema.string()
   .required();
 
 const OutputModeSchema = Schema.union([
-  Schema.const("text").description("纯文本"),
-  Schema.const("text-media").description("文本＋图片附件"),
-  Schema.const("card").description("Takumi 图片卡片"),
-  Schema.const("card-text").description("Takumi 图片＋文本"),
-  Schema.const("card-text-media").description("Takumi 图片＋文本＋图片附件"),
+  Schema.const("text").description("📝 纯文本"),
+  Schema.const("text-media").description("📝📎 文本＋图片附件"),
+  Schema.const("card").description("🖼️ Takumi 图片卡片"),
+  Schema.const("card-text").description("🖼️📝 Takumi 图片＋文本"),
+  Schema.const("card-text-media").description("🖼️📝📎 Takumi 图片＋文本＋图片附件"),
 ]).role("radio").default("card-text")
   .description("🖼️ 消息输出模式；附件由插件下载后发送，不依赖协议端访问 X");
 
@@ -179,12 +180,16 @@ export const Config = Schema.intersect([
       .description("配图最大宽度（px，正整数）；同时受卡片列宽限制"),
     takumiMediaMaxHeight: Schema.number().min(1).step(1).default(333)
       .description("配图最大高度（px，正整数）"),
-    takumiMediaCrop: Schema.boolean().default(false)
-      .description("居中裁剪并填满图片框；关闭时保持比例、只缩小不放大"),
+    takumiMediaCrop: Schema.union([
+      Schema.const("none").description("🖼️ 完全不裁剪"),
+      Schema.const("mild").description("✂️ 轻微裁剪"),
+      Schema.const("aggressive").description("🔲 激进裁剪"),
+    ]).role("radio").default("mild")
+      .description("裁剪方式：完全不裁剪保留完整画面；轻微裁剪居中且最多损失 15% 面积，允许不铺满；前两者不放大小图。激进裁剪居中填满图片框，允许放大且不限制裁剪量"),
     takumiMediaLayout: Schema.union([
-      Schema.const("grid-2").description("两列网格"),
-      Schema.const("column").description("单列纵排"),
-      Schema.const("grid-3").description("三列网格"),
+      Schema.const("grid-2").description("↔️ 两列网格"),
+      Schema.const("column").description("⬇️ 单列纵排"),
+      Schema.const("grid-3").description("🔳 三列网格"),
     ]).role("radio").default("grid-2")
       .description("多图排列方式；从左到右、从上到下，末行不足时靠左"),
     takumiImageMaxSizeMiB: Schema.number().min(0.01).default(5)

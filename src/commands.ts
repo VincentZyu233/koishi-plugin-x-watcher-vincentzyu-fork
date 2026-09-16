@@ -1,3 +1,4 @@
+import { helpCommands, helpDescription, helpOption, HELP_COMMON } from "./help";
 import { errorMessage } from "./errors";
 import { h, type Context, type Logger, type Session } from "koishi";
 import {
@@ -312,33 +313,33 @@ function registerWatchCommand(
   ctx
     .command(
       "x-watcher.watch <twitter_username> [regexp:text]",
-      "订阅 X/Twitter 用户动态",
+      helpDescription("x-watcher.watch"),
     )
-    .option("media", "-m", { fallback: false })
-    .option("quote", "--quote", { fallback: false })
-    .option("retweet", "--retweet", { fallback: false })
+    .option("media", `-m ${helpOption("x-watcher.watch", "media", dependencies)}`, { fallback: false })
+    .option("quote", `--quote ${helpOption("x-watcher.watch", "quote", dependencies)}`, { fallback: false })
+    .option("retweet", `--retweet ${helpOption("x-watcher.watch", "retweet", dependencies)}`, { fallback: false })
     .alias("xwatch")
     .alias("xwa")
     .action(async ({ session, options }, twitterUsername, regexp) => {
       if (session === undefined) return;
       if (twitterUsername === undefined) {
-        await reply(session, "请提供要订阅的 X/Twitter 用户名");
+        await reply(session, "⚠️ 请提供要订阅的 X/Twitter 用户名");
         return;
       }
       const address = sessionAddress(session);
       if (address === null) {
-        await reply(session, "当前会话缺少频道或用户标识，无法保存订阅");
+        await reply(session, "❌ 当前会话缺少频道或用户标识，无法保存订阅");
         return;
       }
       const parsedHandle = normalizeHandle(twitterUsername);
       if (!parsedHandle.ok) {
-        await reply(session, parsedHandle.error);
+        await reply(session, `⚠️ ${parsedHandle.error}`);
         return;
       }
       const filter = normalizeFilterInput(regexp);
       const compiled = compileFilter(filter);
       if (!compiled.ok) {
-        await reply(session, `正则表达式格式错误：${compiled.error}`);
+        await reply(session, `⚠️ 正则表达式格式错误：${compiled.error}`);
         return;
       }
       const watchOptions: WatchOptions = {
@@ -372,7 +373,7 @@ function registerWatchCommand(
           );
           await reply(
             session,
-            `已更新 ${localMatch.twitter_fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+            `✅ 已更新 ${localMatch.twitter_fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
           );
           return;
         }
@@ -384,7 +385,7 @@ function registerWatchCommand(
         if (!resolved.ok) {
           await reply(
             session,
-            `获取 X/Twitter 用户失败：${resolved.error.message}`,
+            `❌ 获取 X/Twitter 用户失败：${resolved.error.message}`,
           );
           return;
         }
@@ -408,7 +409,7 @@ function registerWatchCommand(
           );
           await reply(
             session,
-            `已更新 ${resolved.value.fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+            `✅ 已更新 ${resolved.value.fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
           );
           return;
         }
@@ -417,7 +418,7 @@ function registerWatchCommand(
         if (!baseline.ok) {
           await reply(
             session,
-            `建立订阅水位失败：${baseline.error.message}`,
+            `❌ 建立订阅水位失败：${baseline.error.message}`,
           );
           return;
         }
@@ -452,12 +453,12 @@ function registerWatchCommand(
           : `后续动态将在约 ${dependencies.interval} 分钟内推送`;
         await reply(
           session,
-          `已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
+          `✅ 已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
         );
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`watch 命令失败：${message}`);
-        await reply(session, "订阅失败，请稍后重试");
+        await reply(session, "❌ 订阅失败，请稍后重试");
       }
     });
 }
@@ -472,24 +473,24 @@ function registerUnwatchCommand(
   ctx
     .command(
       "x-watcher.unwatch <twitter_username>",
-      "取消 X/Twitter 用户订阅",
+      helpDescription("x-watcher.unwatch"),
     )
     .alias("xun")
     .alias("xunwatch")
     .action(async ({ session }, twitterUsername) => {
       if (session === undefined) return;
       if (twitterUsername === undefined) {
-        await reply(session, "请提供要取消订阅的 X/Twitter 用户名");
+        await reply(session, "⚠️ 请提供要取消订阅的 X/Twitter 用户名");
         return;
       }
       const address = sessionAddress(session);
       if (address === null) {
-        await reply(session, "当前会话缺少频道或用户标识，无法管理订阅");
+        await reply(session, "❌ 当前会话缺少频道或用户标识，无法管理订阅");
         return;
       }
       const parsedHandle = normalizeHandle(twitterUsername);
       if (!parsedHandle.ok) {
-        await reply(session, parsedHandle.error);
+        await reply(session, `⚠️ ${parsedHandle.error}`);
         return;
       }
       try {
@@ -510,11 +511,11 @@ function registerUnwatchCommand(
           }
         }
         if (target === undefined) {
-          await reply(session, "订阅不存在");
+          await reply(session, "⚠️ 订阅不存在");
           return;
         }
         if (!target.active) {
-          await reply(session, `${target.twitter_username} 的订阅已经取消`);
+          await reply(session, `⚠️ ${target.twitter_username} 的订阅已经取消`);
           return;
         }
         await ctx.database.set(
@@ -531,12 +532,12 @@ function registerUnwatchCommand(
         );
         await reply(
           session,
-          `已取消 ${target.twitter_username} 的订阅${remote}`,
+          `✅ 已取消 ${target.twitter_username} 的订阅${remote}`,
         );
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`unwatch 命令失败：${message}`);
-        await reply(session, "取消订阅失败，请稍后重试");
+        await reply(session, "❌ 取消订阅失败，请稍后重试");
       }
     });
 }
@@ -549,7 +550,7 @@ function registerListCommand(
 ): void {
   const reply = createCommandReply(dependencies);
   ctx
-    .command("x-watcher.list", "查看 X/Twitter 订阅列表")
+    .command("x-watcher.list", helpDescription("x-watcher.list"))
     .alias("xlist")
     .alias("xls")
     .action(async ({ session }) => {
@@ -557,7 +558,7 @@ function registerListCommand(
       const output = messageOutput(dependencies);
       const address = sessionAddress(session);
       if (address === null) {
-        await reply(session, "当前会话缺少频道或用户标识，无法读取订阅");
+        await reply(session, "❌ 当前会话缺少频道或用户标识，无法读取订阅");
         return;
       }
       try {
@@ -578,7 +579,7 @@ function registerListCommand(
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xlist 命令失败：${message}`);
-        await reply(session, "获取订阅列表失败，请稍后重试");
+        await reply(session, "❌ 获取订阅列表失败，请稍后重试");
       }
     });
 }
@@ -593,9 +594,9 @@ function registerLatestCommand(
   ctx
     .command(
       "x-watcher.latest [twitter_username]",
-      "获取指定 X/Twitter 用户的最新推文或回复",
+      helpDescription("x-watcher.latest"),
     )
-    .option("type", "-t, --type <type:string>", { fallback: "post" })
+    .option("type", `-t, --type <type:string> ${helpOption("x-watcher.latest", "type", dependencies)}`, { fallback: "post" })
     .alias("xlatest")
     .alias("xla")
     .action(async ({ session, options }, twitterUsername) => {
@@ -604,18 +605,18 @@ function registerLatestCommand(
       const defaultUsername = dependencies.latestDefaultUsername ?? "amsrntk3";
       const parsedHandle = normalizeHandle(twitterUsername ?? defaultUsername);
       if (!parsedHandle.ok) {
-        await reply(session, parsedHandle.error);
+        await reply(session, `⚠️ ${parsedHandle.error}`);
         return;
       }
       const requested = options === undefined || options.type === undefined
         ? "post"
         : options.type;
       if (requested !== "post" && requested !== "reply") {
-        await reply(session, "动态类型只支持 post 或 reply");
+        await reply(session, "⚠️ 动态类型只支持 post 或 reply");
         return;
       }
       if (dependencies.source.fetchLatest === undefined) {
-        await reply(session, "当前数据源不支持即时查询最新动态");
+        await reply(session, "⚠️ 当前数据源不支持即时查询最新动态");
         return;
       }
       const waitingHintId = await sendWaitingHint(
@@ -627,18 +628,18 @@ function registerLatestCommand(
       try {
         const user = await dependencies.source.resolveUser(parsedHandle.value);
         if (!user.ok) {
-          await reply(session, `获取 X/Twitter 用户失败：${user.error.message}`);
+          await reply(session, `❌ 获取 X/Twitter 用户失败：${user.error.message}`);
           return;
         }
         const latest = await dependencies.source.fetchLatest(user.value, requested);
         if (!latest.ok) {
-          await reply(session, `获取最新动态失败：${latest.error.message}`);
+          await reply(session, `❌ 获取最新动态失败：${latest.error.message}`);
           return;
         }
         if (latest.value === null) {
           await reply(
             session,
-            `未在最近的时间线中找到 @${user.value.username} 的${requested === "post" ? "推文" : "回复"}`,
+            `⚠️ 未在最近的时间线中找到 @${user.value.username} 的${requested === "post" ? "推文" : "回复"}`,
           );
           return;
         }
@@ -646,7 +647,7 @@ function registerLatestCommand(
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xlatest 命令失败：${message}`);
-        await reply(session, "获取最新动态失败，请稍后重试");
+        await reply(session, "❌ 获取最新动态失败，请稍后重试");
       } finally {
         await retractWaitingHint(session, logger, waitingHintId);
       }
@@ -663,9 +664,9 @@ function registerRecentCommand(
   ctx
     .command(
       "x-watcher.recent [twitter_username]",
-      "获取指定 X/Twitter 用户最近的推文和回复",
+      helpDescription("x-watcher.recent"),
     )
-    .option("count", "-c, --count <count:number>")
+    .option("count", `-c, --count <count:number> ${helpOption("x-watcher.recent", "count", dependencies)}`)
     .alias("xrecent")
     .alias("xre")
     .action(async ({ session, options }, twitterUsername) => {
@@ -674,7 +675,7 @@ function registerRecentCommand(
       const defaultUsername = dependencies.recentDefaultUsername ?? "OpenAI";
       const parsedHandle = normalizeHandle(twitterUsername ?? defaultUsername);
       if (!parsedHandle.ok) {
-        await reply(session, parsedHandle.error);
+        await reply(session, `⚠️ ${parsedHandle.error}`);
         return;
       }
       const configuredCount = dependencies.recentDefaultCount ?? 5;
@@ -682,11 +683,11 @@ function registerRecentCommand(
         ? configuredCount
         : options.count;
       if (!Number.isInteger(count) || count < 1 || count > 50) {
-        await reply(session, "数量必须是 1～50 的整数；该数量会分别应用于推文和回复");
+        await reply(session, "⚠️ 数量必须是 1～50 的整数；该数量会分别应用于推文和回复");
         return;
       }
       if (dependencies.source.fetchRecent === undefined) {
-        await reply(session, "当前数据源不支持批量查询最近动态");
+        await reply(session, "⚠️ 当前数据源不支持批量查询最近动态");
         return;
       }
       const waitingHintId = await sendWaitingHint(
@@ -698,23 +699,23 @@ function registerRecentCommand(
       try {
         const user = await dependencies.source.resolveUser(parsedHandle.value);
         if (!user.ok) {
-          await reply(session, `获取 X/Twitter 用户失败：${user.error.message}`);
+          await reply(session, `❌ 获取 X/Twitter 用户失败：${user.error.message}`);
           return;
         }
         const recent = await dependencies.source.fetchRecent(user.value, count);
         if (!recent.ok) {
-          await reply(session, `获取最近动态失败：${recent.error.message}`);
+          await reply(session, `❌ 获取最近动态失败：${recent.error.message}`);
           return;
         }
         if (recent.value.length === 0) {
-          await reply(session, `未找到 @${user.value.username} 最近的推文或回复`);
+          await reply(session, `⚠️ 未找到 @${user.value.username} 最近的推文或回复`);
           return;
         }
         await reply(session, await output.recentActivities(user.value, recent.value));
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xrecent 命令失败：${message}`);
-        await reply(session, "获取最近动态失败，请稍后重试");
+        await reply(session, "❌ 获取最近动态失败，请稍后重试");
       } finally {
         await retractWaitingHint(session, logger, waitingHintId);
       }
@@ -728,12 +729,12 @@ function registerHelpCommand(
 ): void {
   const reply = createCommandReply(dependencies);
   ctx
-    .command("x-watcher.help", "查看 X/Twitter 插件指令帮助")
+    .command("x-watcher.help", helpDescription("x-watcher.help"))
     .alias("xhe")
     .action(async ({ session }) => {
       if (session === undefined) return;
       const output = messageOutput(dependencies);
-      await reply(session, await output.help());
+      await reply(session, await output.help(dependencies));
     });
 }
 
@@ -749,4 +750,9 @@ export function registerCommands(
   registerHelpCommand(ctx, dependencies);
   registerLatestCommand(ctx, dependencies, logger);
   registerRecentCommand(ctx, dependencies, logger);
+  for (const definition of helpCommands(dependencies)) {
+    const command = ctx.command(definition.name)
+      .usage([...definition.notes.map((note) => `ℹ️ ${note}`), ...HELP_COMMON].join("\n"));
+    for (const example of definition.examples) command.example(example);
+  }
 }

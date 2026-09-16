@@ -1,6 +1,8 @@
 # 🐦 koishi-plugin-x-watcher
 
 [![npm](https://img.shields.io/npm/v/koishi-plugin-x-watcher?style=flat-square)](https://www.npmjs.com/package/koishi-plugin-x-watcher)
+[![GitHub](https://img.shields.io/badge/GitHub-仓库-181717?style=flat-square&logo=github)](https://github.com/VincentZyu233/koishi-plugin-x-watcher-vincentzyu-fork)
+[![Gitee](https://img.shields.io/badge/Gitee-仓库-C71D23?style=flat-square&logo=gitee)](https://gitee.com/vincent-zyu/koishi-plugin-x-watcher-vincentzyu-fork)
 
 在频道或私聊中订阅指定 X/Twitter 用户的原创、回复、引用和转推。插件支持 Rettiwt 轮询、TwitterAPI.io REST 轮询和 TwitterAPI.io Account Stream WebSocket；每个插件实例只运行一种数据源和模式，不会并行抓取或自动降级。
 
@@ -28,7 +30,7 @@
 | `takumiImageMaxSizeMiB` | `number` | `5` | 每张渲染图和图片附件的二进制大小上限，最小 0.01 MiB；超限后调用 FFmpeg 转 JPEG 压缩 |
 | `takumiMediaMaxWidth` | `number` | `666` | 卡片内每张配图的最大宽度（px，正整数），同时受列宽限制 |
 | `takumiMediaMaxHeight` | `number` | `333` | 卡片内每张配图的最大高度（px，正整数） |
-| `takumiMediaCrop` | `boolean` | `false` | 关闭时等比缩小、不放大；开启时居中裁剪并填满图片框 |
+| `takumiMediaCrop` | `"none" \| "mild" \| "aggressive"` | `mild` | 单选：完全不裁剪、轻微裁剪（最多损失 15% 面积，默认）、激进裁剪（居中填满）；前两者不放大小图，激进裁剪允许放大 |
 | `takumiMediaLayout` | `"grid-2" \| "column" \| "grid-3"` | `grid-2` | 多图排列：两列网格、单列纵排、三列网格 |
 | `enableQuote` | `boolean` | `true` | 指令触发的所有回复是否引用触发消息；主动订阅推送不引用 |
 | `enableWaitingHint` | `boolean` | `true` | `xlatest` 和 `xrecent` 查询及渲染期间是否显示临时等待提示；最终回复后自动撤回 |
@@ -90,7 +92,10 @@ xrecent [username] [-c count]
 - 用户名可写成 `username` 或 `@username`。
 - 正则只匹配当前动态正文。
 - 订阅按频道或私聊隔离，频道中的任何成员都可以管理当前频道订阅。
-- `xhe` 展示全部公开指令、别名与关键选项；它和 xlist 使用所选模式的卡片、文字部分，不附加推文媒体。
+- `xhe` 展示全部公开指令、别名、选项含义、可选值、当前配置默认值和用法示例；它和 xlist 使用所选模式的卡片、文字部分，不附加推文媒体。
+- 每个指令的 `--help` 保留 Koishi 原生文字帮助，与 `xhe` 共用用法说明；`--type` 仅用于 `xlatest`，支持 `post`、`reply`。
+- 文字帮助、查询结果和操作反馈增加 Emoji 标识；`xrecent` 在每条序号前用 📝 区分推文、💬 区分回复。Takumi 卡片不添加这些装饰，原始正文不变。
+- 再次订阅会完整覆盖规则：省略正则会清空过滤，省略 `-m`、`--quote`、`--retweet` 会关闭对应功能。新建或重新启用不补发历史，活跃订阅更新保留水位；取消订阅保留记录，`xlist` 仍会显示。
 - `xlatest` 只即时读取并发送指定用户最近的推文或回复，不创建订阅、也不推进订阅水位；用户名省略时查询 `latestDefaultUsername`，`-t` 省略时默认 `post`。
 - `xrecent` 合并获取指定用户最近的原创推文和回复，不包含引用或转推，也不改变任何订阅。用户名省略时查询 `recentDefaultUsername`。
 - `xrecent -c 10` 表示最多获取 `10` 条推文和 `10` 条回复，而不是总共 `10` 条；命令参数和配置均限制为 `1`～`50` 的整数。
@@ -100,6 +105,8 @@ xrecent [username] [-c count]
 - 每张 Takumi 图片和独立图片附件默认限制为 5 MiB（5 × 1024 × 1024 字节）。未超限保留原格式；超限通过 FFmpeg 转成 JPEG，先降低质量再缩小尺寸，最多尝试 8 次。卡片失败回退文字，附件失败跳过并提示；不发送超限图片。该限制不是整条多图消息的总大小上限。
 
 消息模式使用 `outputMode` 单选配置，旧 `outputFormats` 不再读取；升级后请重新选择偏好，未配置时默认 `card-text`。
+
+`takumiMediaCrop` 已由布尔开关改为三档单选，不兼容旧 `true` / `false`；已有配置需重新选择或删除该字段以使用默认 `mild`。`mild` 向图片框比例靠拢，居中裁剪且至少保留原图面积的 85%，必要时不铺满；`aggressive` 不限制裁剪量。裁剪仅影响卡片内配图（包括媒体封面），不改变独立图片附件。
 
 | 值 | 模式 |
 | --- | --- |
@@ -111,7 +118,7 @@ xrecent [username] [-c count]
 
 - 输出顺序为卡片、文字、附件；文字使用普通换行，外部内容转义后发送。xre 的附件标注所属动态序号。
 - 卡片内媒体与独立附件是两种展示方式。自动推送仍遵守订阅的 `-m` 开关；没有启用媒体时，卡片也不包含推文媒体。
-- 卡片配图默认在 666×333 px 上限内保持原始比例，不裁剪、不放大小图。单张居中；多图按所选列数从左到右、从上到下排列，间距 14 px，末行不足时靠左，保持原列宽。图片在各自列内水平居中、顶部对齐，每行高度随内容收缩。
+- 卡片配图默认在 666×333 px 上限内轻微居中裁剪，最多损失 15% 面积，等比缩小、不放大小图。单张居中；多图按所选列数从左到右、从上到下排列，间距 14 px，末行不足时靠左，保持原列宽。图片在各自列内水平居中、顶部对齐，每行高度随内容收缩。
 - 开启裁剪时，以有效列宽和最大高度形成统一图片框，居中裁剪而不拉伸。以上设置适用于 xla、xre、自动推送卡片内的图片及 GIF/视频封面，不改变文字、头像、整张卡片宽度或独立附件尺寸。加载或尺寸读取失败时显示最多 96 px 高的占位。
 - 独立附件由插件按代理配置下载，再以 Base64 图片发送，不把原图 URL 交给 NapCat。所有数据源均适用，关闭代理时直连；每次输出最多并发 3 个附件任务，下载超时 15 秒，最多跟随 3 次重定向，同次附件下载按 URL 复用。
 - GIF 附件转为首帧静态图片；视频不作为独立附件发送，请通过原文链接查看。单个附件失败不会阻止其他内容发送。

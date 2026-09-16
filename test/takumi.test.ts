@@ -50,8 +50,8 @@ describe("Takumi WASM 图片渲染", () => {
       text: "小图不放大", createdAt: new Date("2026-09-16T00:00:00Z"), url: "https://x.com/test/status/1",
       media: [{ kind: "image" as const, url: "https://example.com/one.png" }],
     };
-    const normal = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50 });
-    const cropped = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50, mediaCrop: true });
+    const normal = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50, mediaCrop: "none" });
+    const cropped = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50, mediaCrop: "aggressive" });
     const empty = await normal.renderActivity(activity, false);
     const small = await normal.renderActivity(activity, true);
     const crop = await cropped.renderActivity(activity, true);

@@ -3,7 +3,7 @@ import { h, type Logger } from "koishi";
 import type { OutputMode } from "./config";
 import type { WatcherRecord } from "./database";
 import type { XActivity, XUser } from "./domain";
-import { formatHelpMessage } from "./help";
+import { formatHelpMessage, helpCommands, type HelpDefaults } from "./help";
 import { formatActivityMessage, formatRecentActivitiesMessage, formatWatcherListMessage } from "./formatter";
 import type { TakumiRenderer } from "./render/takumi";
 import type { ImageProcessor } from "./render/image";
@@ -12,7 +12,7 @@ export interface MessageOutput {
   readonly activity: (activity: XActivity, includeMedia: boolean) => Promise<string>;
   readonly watcherList: (watchers: ReadonlyArray<WatcherRecord>) => Promise<string>;
   readonly recentActivities: (user: XUser, activities: ReadonlyArray<XActivity>) => Promise<string>;
-  readonly help: () => Promise<string>;
+  readonly help: (defaults?: HelpDefaults) => Promise<string>;
 }
 export type AttachmentOutput = (activities: ReadonlyArray<XActivity>, numbered: boolean) => Promise<string>;
 
@@ -74,7 +74,7 @@ export function createMessageOutput(
       formatWatcherListMessage(watchers),
       async (renderer) => watchers.length === 0 ? [] : [await renderer.renderWatcherList(watchers)],
     ),
-    help: () => compose(h.text(formatHelpMessage()).toString(), async (renderer) => [await renderer.renderHelp()]),
+    help: (defaults) => compose(h.text(formatHelpMessage(defaults)).toString(), async (renderer) => [await renderer.renderHelp(helpCommands(defaults))]),
   };
 }
 
@@ -83,5 +83,5 @@ export const legacyMessageOutput: MessageOutput = {
   activity: async (activity) => formatActivityMessage(activity),
   watcherList: async (watchers) => formatWatcherListMessage(watchers),
   recentActivities: async (user, activities) => formatRecentActivitiesMessage(user, activities),
-  help: async () => h.text(formatHelpMessage()).toString(),
+  help: async (defaults) => h.text(formatHelpMessage(defaults)).toString(),
 };

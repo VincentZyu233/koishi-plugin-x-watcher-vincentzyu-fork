@@ -9,10 +9,11 @@ import type { Context, Logger } from "koishi";
 import {
   FONT_ASSET_PATH_RELATIVE_TO_BASE_DIR,
   type TakumiImageFormat,
+  type TakumiMediaCrop,
 } from "../config";
 import type { XActivity, XMedia, XUser } from "../domain";
 import type { WatcherRecord } from "../database";
-import { HELP_COMMANDS, type HelpCommand } from "../help";
+import { helpCommands, HELP_COMMON, type HelpCommand } from "../help";
 import { getFfmpegService, type FfmpegService } from "./image";
 
 const WIDTH = 900;
@@ -26,7 +27,7 @@ export interface TakumiImageOptions {
   readonly quality: number;
   readonly mediaMaxWidth?: number;
   readonly mediaMaxHeight?: number;
-  readonly mediaCrop?: boolean;
+  readonly mediaCrop?: TakumiMediaCrop;
   readonly mediaLayout?: MediaLayoutOptions["layout"];
 }
 
@@ -189,7 +190,7 @@ function mediaGrid(items: ReadonlyArray<RenderedMedia>, options: MediaLayoutOpti
     const node = item.data !== null && original !== null
       ? image({
         src: item.data, ...size,
-        style: { ...size, objectFit: options.crop ? "cover" : "contain", borderRadius: 10 },
+        style: { ...size, objectFit: options.crop === "none" ? "contain" : "cover", borderRadius: 10 },
       })
       : container({
         style: {
@@ -382,6 +383,9 @@ function helpCommandCard(command: HelpCommand): Node {
     text(command.syntax, { fontSize: 21, fontWeight: 600, color: palette.text }),
     text(command.description, { fontSize: 18, color: palette.muted }),
     text(`别名：${command.aliases.join("、")}`, { fontSize: 16, color: palette.accent }),
+    ...command.notes.map((note) => text(note, { fontSize: 16, lineHeight: 1.4, color: palette.muted })),
+    text("示例：", { fontSize: 16, color: palette.muted }),
+    ...command.examples.map((example) => text(example, { fontSize: 16, lineHeight: 1.4, color: palette.text })),
   ];
   if (command.options.length > 0) {
     children.push(container({
@@ -422,7 +426,7 @@ export interface TakumiRenderer {
     user: XUser,
     activities: ReadonlyArray<XActivity>,
   ) => Promise<ReadonlyArray<Buffer>>;
-  readonly renderHelp: () => Promise<Buffer>;
+  readonly renderHelp: (commands?: ReadonlyArray<HelpCommand>) => Promise<Buffer>;
 }
 
 function mimeTypeFor(format: TakumiImageFormat): "image/jpeg" | "image/png" | "image/webp" {
@@ -631,7 +635,7 @@ export function createTakumiRenderer(
       }
       return pages;
     },
-    renderHelp: async () => {
+    renderHelp: async (commands = helpCommands()) => {
       const root = container({
         style: {
           width: WIDTH,
@@ -644,7 +648,8 @@ export function createTakumiRenderer(
         children: [
           text("X Watcher 指令帮助", { fontSize: 34, fontWeight: 650, color: palette.text }),
           text("订阅、查询和管理 X / Twitter 动态", { fontSize: 18, color: palette.muted }),
-          ...HELP_COMMANDS.map((command) => helpCommandCard(command)),
+          ...commands.map((command) => helpCommandCard(command)),
+          ...HELP_COMMON.map((note) => text(note, { fontSize: 16, lineHeight: 1.4, color: palette.muted })),
         ],
       });
       return renderImage(root, WIDTH, undefined);

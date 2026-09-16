@@ -176,7 +176,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
         quality: config.takumiImageQuality ?? 50,
         mediaMaxWidth: config.takumiMediaMaxWidth ?? 666,
         mediaMaxHeight: config.takumiMediaMaxHeight ?? 333,
-        mediaCrop: config.takumiMediaCrop ?? false,
+        mediaCrop: config.takumiMediaCrop ?? "mild",
         mediaLayout: config.takumiMediaLayout ?? "grid-2",
       }) : null,
       logger,
