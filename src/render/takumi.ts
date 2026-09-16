@@ -232,11 +232,11 @@ function recentActivityCard(
         container({
           style: { display: "flex", flexDirection: "column", gap: 2, flex: 1 },
           children: [
-            text(activity.fullname, { fontSize: 25, fontWeight: 600, color: palette.text }),
+            text(activity.fullname, { fontSize: 25, fontWeight: 400, color: palette.text }),
             text(`@${activity.username} · ${formatTime(activity.createdAt)}`, { fontSize: 17, color: palette.muted }),
           ],
         }),
-        text(actionLabel(activity.kind), { fontSize: 17, fontWeight: 600, color: palette.accent }),
+        text(actionLabel(activity.kind), { fontSize: 17, fontWeight: 400, color: palette.accent }),
       ],
     }),
     text(activity.text.trim() || "（无文字内容）", {
@@ -585,7 +585,7 @@ export function createTakumiRenderer(
           backgroundColor: palette.background,
         },
         children: [
-          text("X / Twitter 频道订阅", { fontSize: 32, fontWeight: 650, color: palette.text }),
+          text("X / Twitter 频道订阅", { fontSize: 32, fontWeight: 500, color: palette.text }),
           text(`共 ${watchers.length} 条订阅`, { fontSize: 17, color: palette.muted }),
           watcherTable(watchers, avatars),
         ],
@@ -619,7 +619,7 @@ export function createTakumiRenderer(
             container({
               style: { display: "flex", alignItems: "center" },
               children: [
-                text(`${user.fullname} (@${user.username}) 最近动态`, { flex: 1, fontSize: 31, fontWeight: 650, color: palette.text }),
+                text(`${user.fullname} (@${user.username}) 最近动态`, { flex: 1, fontSize: 31, fontWeight: 500, color: palette.text }),
                 text(`第 ${pageIndex + 1}/${pageCount} 页`, { fontSize: 17, color: palette.muted }),
               ],
             }),

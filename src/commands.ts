@@ -663,6 +663,7 @@ function registerHelpCommand(
   ctx
     .command("x-watcher.help", helpDescription("x-watcher.help"))
     .alias("xhe")
+    .alias("xhelp")
     .action(async ({ session }) => {
       if (session === undefined) return;
       const output = messageOutput(dependencies);

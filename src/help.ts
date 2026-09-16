@@ -74,7 +74,7 @@ export function helpCommands(defaults: HelpDefaults = {}): ReadonlyArray<HelpCom
       examples: ["xre", "xre OpenAI -c 3"],
     },
     {
-      name: "x-watcher.help", emoji: "❓", syntax: "x-watcher.help", aliases: ["xhe"],
+      name: "x-watcher.help", emoji: "❓", syntax: "x-watcher.help", aliases: ["xhe", "xhelp"],
       description: "查看全部指令和用法说明", options: [],
       notes: ["总览帮助遵循当前输出模式；各指令 --help 使用 Koishi 原生文字帮助。"],
       examples: ["xhe", "xla --help"],
