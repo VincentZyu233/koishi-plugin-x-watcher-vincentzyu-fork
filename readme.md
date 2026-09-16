@@ -14,23 +14,31 @@
 | --- | --- | --- | --- |
 | `apiKeys` | `string[]` | 无，必填 | Rettiwt Cookie API Key 池；按配置顺序故障转移 |
 | `interval` | `number` | `5` | 检查间隔，单位为分钟，最小值为 `1` |
-| `outputFormats` | `("image" \| "text")[]` | `["image", "text"]` | 消息输出格式；两项同时启用时在同一条消息中先图后文。图片由 Takumi WASM 渲染，不依赖 Puppeteer |
-| `fontAssetPathRelativeToBaseDir` | `string[]` | `["data", "fonts", "LXGWWenKaiMono-Regular.ttf"]` | Takumi 字体路径片段；依次拼接到 Koishi 根目录 `ctx.baseDir`，当前为只读配置且不会自动下载字体 |
-| `activityTypes` | `("post" \| "reply")[]` | `["post", "reply"]` | 自动推送的动态类型；引用和转推仍由 `watch` 命令选项控制 |
-| `maxPostCount` | `number` | `10` | 单轮每条订阅最多推送的最新推文数；`0` 或负数表示不限量 |
-| `maxReplyCount` | `number` | `10` | 单轮每条订阅最多推送的最新回复数；`0` 或负数表示不限量 |
-| `latestDefaultUsername` | `string` | `amsrntk3` | `xlatest` 省略用户名时查询的账号，不需要填写 `@`；默认账号：[https://x.com/amsrntk3](https://x.com/amsrntk3) |
+| `outputMode` | `string` | `card-text` | 单选：纯文本、文本＋图片附件、Takumi 卡片、卡片＋文本、卡片＋文本＋图片附件，具体取值见下表 |
 | `recentDefaultUsername` | `string` | `OpenAI` | `xrecent` 省略用户名时查询的账号，不需要填写 `@`；默认账号：[https://x.com/OpenAI](https://x.com/OpenAI) |
-| `recentDefaultCount` | `number` | `10` | `xrecent` 默认每类获取数量；表示推文和回复各取此数量，只接受 `1`～`50` 的整数 |
+| `recentDefaultCount` | `number` | `5` | `xrecent` 默认每类获取数量；表示推文和回复各取此数量，只接受 `1`～`50` 的整数 |
+| `latestDefaultUsername` | `string` | `amsrntk3` | `xlatest` 省略用户名时查询的账号，不需要填写 `@`；默认账号：[https://x.com/amsrntk3](https://x.com/amsrntk3) |
+| `activityTypes` | `("post" \| "reply")[]` | `["post", "reply"]` | 自动推送的动态类型；引用和转推仍由 `watch` 命令选项控制 |
+| `maxPostCount` | `number` | `5` | 单轮每条订阅最多推送的最新推文数；`0` 或负数表示不限量 |
+| `maxReplyCount` | `number` | `5` | 单轮每条订阅最多推送的最新回复数；`0` 或负数表示不限量 |
+| `fontAssetPathRelativeToBaseDir` | `string[]` | `["data", "fonts", "LXGWWenKaiMono-Regular.ttf"]` | Takumi 字体路径片段；依次拼接到 Koishi 根目录 `ctx.baseDir`，当前为只读配置且不会自动下载字体 |
+| `watcherAvatarRefreshMode` | `"cache" \| "placeholder" \| "always"` | `cache` | `xlist` 图片中头像的更新策略；`cache` 缺失时补查并缓存，`placeholder` 仅使用缓存并显示首字母，`always` 每次列表时刷新 |
+| `takumiImageFormat` | `"jpg" \| "png" \| "webp"` | `jpg` | Takumi 图片输出格式；JPG 默认可降低 OneBot 上传体积 |
+| `takumiImageQuality` | `number` | `50` | JPG 输出质量，范围 `0`～`100`；PNG 与 WebP 下会被 Takumi WASM 忽略 |
+| `takumiImageMaxSizeMiB` | `number` | `5` | 每张渲染图和图片附件的二进制大小上限，最小 0.01 MiB；超限后调用 FFmpeg 转 JPEG 压缩 |
+| `takumiMediaMaxWidth` | `number` | `666` | 卡片内每张配图的最大宽度（px，正整数），同时受列宽限制 |
+| `takumiMediaMaxHeight` | `number` | `333` | 卡片内每张配图的最大高度（px，正整数） |
+| `takumiMediaCrop` | `boolean` | `false` | 关闭时等比缩小、不放大；开启时居中裁剪并填满图片框 |
+| `takumiMediaLayout` | `"grid-2" \| "column" \| "grid-3"` | `grid-2` | 多图排列：两列网格、单列纵排、三列网格 |
 | `enableQuote` | `boolean` | `true` | 指令触发的所有回复是否引用触发消息；主动订阅推送不引用 |
 | `enableWaitingHint` | `boolean` | `true` | `xlatest` 和 `xrecent` 查询及渲染期间是否显示临时等待提示；最终回复后自动撤回 |
-| `proxy.enabled` | `boolean` | `false` | 是否启用插件显式代理 |
-| `proxy.url` | `string` | `http://127.0.0.1:7890` | HTTP/HTTPS 代理地址，同时用于 Rettiwt 与 Node 原生 `fetch` |
+| `enableProxy` | `boolean` | `false` | 是否启用插件代理 |
+| `proxyUrl` | `string` | `http://127.0.0.1:7890` | 代理服务器地址，用于 Rettiwt 请求及插件附件下载 |
 
 代理会同时传给 Rettiwt 的 Axios 请求，并接管其 `x-client-transaction-id`
 依赖使用的 Node 原生 `fetch`。由于 Node 的 dispatcher 是进程级资源，启用期间其他
 使用全局 `fetch` 的插件也会使用该代理；插件卸载时会在 dispatcher 未被其他组件替换的
-前提下恢复原值。当前不支持 SOCKS 代理。
+前提下恢复原值。支持 HTTP(S) 与 SOCKS5（`socks://` 或 `socks5://`）代理。
 
 API Key 池始终按配置顺序故障转移，不做负载均衡；认证失败的 Key 会在当前进程隔离，触发 429 的 Key 冷却 60 秒。
 
@@ -66,12 +74,14 @@ xunwatch <username>
 
 xlist
 
+xhe
+
 xlatest [username] [-t post|reply]
 
 xrecent [username] [-c count]
 ```
 
-简写别名：`xwa` → `xwatch`、`xun` → `xunwatch`、`xls` → `xlist`、`xla` → `xlatest`、`xre` → `xrecent`。
+简写别名：`xwa` → `xwatch`、`xun` → `xunwatch`、`xls` → `xlist`、`xhe` → `x-watcher.help`、`xla` → `xlatest`、`xre` → `xrecent`。
 
 - 默认订阅原创和回复。
 - `--quote` 开启引用推文。
@@ -80,11 +90,32 @@ xrecent [username] [-c count]
 - 用户名可写成 `username` 或 `@username`。
 - 正则只匹配当前动态正文。
 - 订阅按频道或私聊隔离，频道中的任何成员都可以管理当前频道订阅。
+- `xhe` 展示全部公开指令、别名与关键选项；它和 xlist 使用所选模式的卡片、文字部分，不附加推文媒体。
 - `xlatest` 只即时读取并发送指定用户最近的推文或回复，不创建订阅、也不推进订阅水位；用户名省略时查询 `latestDefaultUsername`，`-t` 省略时默认 `post`。
 - `xrecent` 合并获取指定用户最近的原创推文和回复，不包含引用或转推，也不改变任何订阅。用户名省略时查询 `recentDefaultUsername`。
 - `xrecent -c 10` 表示最多获取 `10` 条推文和 `10` 条回复，而不是总共 `10` 条；命令参数和配置均限制为 `1`～`50` 的整数。
 - `xrecent` 图片输出使用 Takumi WASM，每页最多展示 `10` 条动态；多页图片和文字会按“引用、分页图片、文字”的顺序放在同一条消息中。图片附件直接展示，视频和 GIF 展示封面，媒体不可用时显示占位块。
-- GIF 和视频在供应商封面不可用时，会尝试调用可选的 FFmpeg 服务提取首帧；未启用 FFmpeg 或抽帧失败时显示原因占位，不影响其他动态。
+- FFmpeg 是必需的 Koishi 服务：启用 `koishi-plugin-ffmpeg` 或 `koishi-plugin-ffmpeg-path` 任一种服务提供插件即可，后者可配置本地路径或自动下载。服务缺失时 x-watcher 等待服务就绪。
+- GIF 和视频在供应商封面不可用时，通过 FFmpeg 提取首帧；抽帧失败显示原因占位。
+- 每张 Takumi 图片和独立图片附件默认限制为 5 MiB（5 × 1024 × 1024 字节）。未超限保留原格式；超限通过 FFmpeg 转成 JPEG，先降低质量再缩小尺寸，最多尝试 8 次。卡片失败回退文字，附件失败跳过并提示；不发送超限图片。该限制不是整条多图消息的总大小上限。
+
+消息模式使用 `outputMode` 单选配置，旧 `outputFormats` 不再读取；升级后请重新选择偏好，未配置时默认 `card-text`。
+
+| 值 | 模式 |
+| --- | --- |
+| `text` | 纯文本和原文链接，不含图片 |
+| `text-media` | 文本和独立图片附件 |
+| `card` | Takumi 图片卡片 |
+| `card-text` | Takumi 图片卡片＋文本（默认） |
+| `card-text-media` | Takumi 图片卡片＋文本＋独立图片附件 |
+
+- 输出顺序为卡片、文字、附件；文字使用普通换行，外部内容转义后发送。xre 的附件标注所属动态序号。
+- 卡片内媒体与独立附件是两种展示方式。自动推送仍遵守订阅的 `-m` 开关；没有启用媒体时，卡片也不包含推文媒体。
+- 卡片配图默认在 666×333 px 上限内保持原始比例，不裁剪、不放大小图。单张居中；多图按所选列数从左到右、从上到下排列，间距 14 px，末行不足时靠左，保持原列宽。图片在各自列内水平居中、顶部对齐，每行高度随内容收缩。
+- 开启裁剪时，以有效列宽和最大高度形成统一图片框，居中裁剪而不拉伸。以上设置适用于 xla、xre、自动推送卡片内的图片及 GIF/视频封面，不改变文字、头像、整张卡片宽度或独立附件尺寸。加载或尺寸读取失败时显示最多 96 px 高的占位。
+- 独立附件由插件按代理配置下载，再以 Base64 图片发送，不把原图 URL 交给 NapCat。所有数据源均适用，关闭代理时直连；每次输出最多并发 3 个附件任务，下载超时 15 秒，最多跟随 3 次重定向，同次附件下载按 URL 复用。
+- GIF 附件转为首帧静态图片；视频不作为独立附件发送，请通过原文链接查看。单个附件失败不会阻止其他内容发送。
+- xla / xre 只回复触发指令的当前频道或私聊，遵守 `enableQuote`，不向订阅频道广播，不改变订阅及水位。后台订阅推送独立运行。
 
 再次执行 `xwatch` 是完整覆盖，不是局部合并：省略正则会清空旧规则，省略 `-m`、`--quote` 或 `--retweet` 会关闭对应能力。非法正则会在命令阶段拒绝；数据库中意外存在的非法规则按 fail-closed 处理。
 
@@ -98,6 +129,7 @@ xwatch -m --quote OpenAI GPT|model
 xwatch --quote --retweet @OpenAI release
 xun OpenAI
 xlist
+xhe
 xlatest thsottiaux
 xlatest thsottiaux -t reply
 xrecent

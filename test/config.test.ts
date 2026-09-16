@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { Config } from "../src/config";
+import {
+  Config,
+  type TakumiImageFormat,
+  type WatcherAvatarRefreshMode,
+} from "../src/config";
 
 // describe("插件配置", () => {
 //   it("只填写 Rettiwt API Key 池时补齐默认 provider 和 mode", () => {
@@ -66,20 +70,26 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key-a", "key-b"],
       interval: 5,
-      outputFormats: ["image", "text"],
+      outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["post", "reply"],
-      maxPostCount: 10,
-      maxReplyCount: 10,
+      maxPostCount: 5,
+      maxReplyCount: 5,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
-      recentDefaultCount: 10,
+      recentDefaultCount: 5,
       enableQuote: true,
       enableWaitingHint: true,
-      proxy: {
-        enabled: false,
-        url: "http://127.0.0.1:7890",
-      },
+      watcherAvatarRefreshMode: "cache",
+      takumiImageFormat: "jpg",
+      takumiImageQuality: 50,
+      takumiMediaMaxWidth: 666,
+      takumiMediaMaxHeight: 333,
+      takumiMediaCrop: false,
+      takumiMediaLayout: "grid-2",
+      takumiImageMaxSizeMiB: 5,
+      enableProxy: false,
+      proxyUrl: "http://127.0.0.1:7890",
     });
   });
 
@@ -89,35 +99,42 @@ describe("插件配置（仅 Rettiwt）", () => {
       mode: "polling",
       apiKeys: ["key"],
       interval: 2,
-      outputFormats: ["image", "text"],
+      outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["reply"],
       maxPostCount: 3,
       maxReplyCount: -1,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
-      recentDefaultCount: 10,
+      recentDefaultCount: 3,
       enableQuote: true,
       enableWaitingHint: false,
+      watcherAvatarRefreshMode: "cache",
     })).toEqual({
       provider: "rettiwt",
       mode: "polling",
       apiKeys: ["key"],
       interval: 2,
-      outputFormats: ["image", "text"],
+      outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["reply"],
       maxPostCount: 3,
       maxReplyCount: -1,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
-      recentDefaultCount: 10,
+      recentDefaultCount: 3,
       enableQuote: true,
       enableWaitingHint: false,
-      proxy: {
-        enabled: false,
-        url: "http://127.0.0.1:7890",
-      },
+      watcherAvatarRefreshMode: "cache",
+      takumiImageFormat: "jpg",
+      takumiImageQuality: 50,
+      takumiMediaMaxWidth: 666,
+      takumiMediaMaxHeight: 333,
+      takumiMediaCrop: false,
+      takumiMediaLayout: "grid-2",
+      takumiImageMaxSizeMiB: 5,
+      enableProxy: false,
+      proxyUrl: "http://127.0.0.1:7890",
     });
   });
 
@@ -133,19 +150,50 @@ describe("插件配置（仅 Rettiwt）", () => {
     });
   });
 
-  it("接受显式 HTTP 代理配置", () => {
+  it("接受 xlist 头像的三种刷新策略", () => {
+    const modes: ReadonlyArray<WatcherAvatarRefreshMode> = [
+      "cache",
+      "placeholder",
+      "always",
+    ];
+    for (const watcherAvatarRefreshMode of modes) {
+      expect(Config({ apiKeys: ["key"], watcherAvatarRefreshMode })).toMatchObject({
+        watcherAvatarRefreshMode,
+      });
+    }
+    expect(() => decodeConfig({
+      apiKeys: ["key"],
+      watcherAvatarRefreshMode: "invalid",
+    })).toThrow();
+  });
+
+  it("接受 Takumi 三种图片格式", () => {
+    const formats: ReadonlyArray<TakumiImageFormat> = ["jpg", "png", "webp"];
+    for (const takumiImageFormat of formats) {
+      expect(Config({ apiKeys: ["key"], takumiImageFormat })).toMatchObject({
+        takumiImageFormat,
+      });
+    }
+    expect(() => decodeConfig({
+      apiKeys: ["key"],
+      takumiImageFormat: "gif",
+    })).toThrow();
+  });
+
+  it("接受顶层代理配置", () => {
     expect(Config({
       apiKeys: ["key"],
-      proxy: {
-        enabled: true,
-        url: "http://127.0.0.1:7890",
-      },
+      enableProxy: true,
+      proxyUrl: "socks5://127.0.0.1:7890",
     })).toMatchObject({
-      proxy: {
-        enabled: true,
-        url: "http://127.0.0.1:7890",
-      },
+      enableProxy: true,
+      proxyUrl: "socks5://127.0.0.1:7890",
     });
+  });
+
+  it("输出模式默认为卡片加文本且拒绝无效模式", () => {
+    expect(Config({ apiKeys: ["key"] })).toMatchObject({ outputMode: "card-text" });
+    expect(() => Config({ apiKeys: ["key"], outputMode: "invalid" as never })).toThrow();
   });
 
   it("拒绝 TwitterAPI.io、旧配置和非法 Rettiwt 参数", () => {

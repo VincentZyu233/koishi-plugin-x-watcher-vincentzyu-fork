@@ -39,74 +39,27 @@ function escapeTableCell(value: string): string {
   return value.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
-/** 按旧版 -m 语义构造图片和 GIF 元素，视频只保留原文链接。 */
-function mediaElements(activity: XActivity, includeMedia: boolean): Element[] {
-  if (!includeMedia) return [];
-  const elements: Element[] = [];
-  for (const media of activity.media) {
-    if (media.kind === "video") continue;
-    elements.push(Element("img", { src: media.url }));
-  }
-  return elements;
+/** 纯文字先拼接再转义，正文中的标签不会变成消息元素。 */
+export function formatActivityMessage(activity: XActivity): string {
+  return Element.text([
+    `${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`,
+    `发布时间：${formatActivityTime(activity.createdAt)}`,
+    cleanActivityText(activity.text) || "（无文字内容）",
+    `原文链接：${activity.url}`,
+  ].join("\n")).toString();
 }
 
-/** 构造动态消息的内容节点，供纯文字和图片加文字两种输出复用。 */
-export function activityMessageElements(
-  activity: XActivity,
-  includeMedia: boolean,
-): Element[] {
-  const text = cleanActivityText(activity.text);
-  return [
-    Element("p", `${activity.fullname} (@${activity.username}) ${activityAction(activity)}：`),
-    Element("p", `发布时间：${formatActivityTime(activity.createdAt)}`),
-    Element("p", text),
-    ...mediaElements(activity, includeMedia),
-    Element("a", { href: activity.url }, "原文链接"),
-  ];
-}
-
-/** 构造可由 Koishi 适配器发送的图文混排消息。 */
-export function formatActivityMessage(
-  activity: XActivity,
-  includeMedia: boolean,
-): string {
-  return activityMessageElements(activity, includeMedia)
-    .map((element) => element.toString())
-    .join("");
-}
-
-/** 构造最近动态列表的文字节点，按传入的新到旧顺序展示。 */
-export function recentActivitiesMessageElements(
-  user: XUser,
-  activities: ReadonlyArray<XActivity>,
-): Element[] {
+export function formatRecentActivitiesMessage(user: XUser, activities: ReadonlyArray<XActivity>): string {
   const postCount = activities.filter((activity) => activity.kind === "post").length;
   const replyCount = activities.filter((activity) => activity.kind === "reply").length;
-  const elements = [Element("p", `${user.fullname} (@${user.username}) 最近动态：${postCount} 条推文，${replyCount} 条回复`)];
-  activities.forEach((activity, index) => {
-    elements.push(Element("br"));
-    elements.push(Element("p", `${index + 1}. ${activity.kind === "post" ? "推文" : "回复"} · ${formatActivityTime(activity.createdAt)}`));
-    elements.push(Element("p", cleanActivityText(activity.text) || "（无文字内容）"));
-    elements.push(Element("a", { href: activity.url }, "原文链接"));
-  });
-  return elements;
-}
-
-/** 格式化最近动态列表的文字输出。 */
-export function formatRecentActivitiesMessage(
-  user: XUser,
-  activities: ReadonlyArray<XActivity>,
-): string {
-  return recentActivitiesMessageElements(user, activities)
-    .map((element) => element.toString())
-    .join("");
-}
-
-/** 构造订阅列表文字节点。 */
-export function watcherListMessageElements(
-  watchers: ReadonlyArray<WatcherRecord>,
-): Element[] {
-  return [Element("p", formatWatcherListMessage(watchers))];
+  return Element.text([
+    `${user.fullname} (@${user.username}) 最近动态：${postCount} 条推文，${replyCount} 条回复`,
+    ...activities.map((activity, index) => [
+      `${index + 1}. ${activityAction(activity)} · ${formatActivityTime(activity.createdAt)}`,
+      cleanActivityText(activity.text) || "（无文字内容）",
+      `原文链接：${activity.url}`,
+    ].join("\n")),
+  ].join("\n\n")).toString();
 }
 
 /** 格式化当前频道的订阅列表。 */
@@ -128,5 +81,5 @@ export function formatWatcherListMessage(
     const retweet = watcher.include_retweet === true ? "开启" : "关闭";
     return `| ${watcher.twitter_username} | ${status} | ${filter} | ${media} | ${quote} | ${retweet} |`;
   });
-  return `当前订阅的 X/Twitter 用户：\n${header}\n${rows.join("\n")}`;
+  return Element.text(`当前订阅的 X/Twitter 用户：\n${header}\n${rows.join("\n")}`).toString();
 }

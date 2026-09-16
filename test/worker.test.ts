@@ -294,6 +294,7 @@ describe("动态 worker", () => {
     expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("101");
   });
 
+
   it("发送期间重新启用不会被旧 worker 回退到较低水位", async () => {
     const { ctx, bot } = await createEnvironment();
     await createWatcher(ctx, {});

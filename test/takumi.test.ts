@@ -18,6 +18,17 @@ function expectPng(buffer: Buffer): void {
   ]);
 }
 
+function expectJpeg(buffer: Buffer): void {
+  expect(buffer.length).toBeGreaterThan(10_000);
+  expect([...buffer.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+}
+
+function expectWebp(buffer: Buffer): void {
+  expect(buffer.length).toBeGreaterThan(1_000);
+  expect(buffer.subarray(0, 4).toString()).toBe("RIFF");
+  expect(buffer.subarray(8, 12).toString()).toBe("WEBP");
+}
+
 function pngHeight(buffer: Buffer): number {
   return buffer.readUInt32BE(20);
 }
@@ -29,6 +40,28 @@ function pageAt(pages: ReadonlyArray<Buffer>, index: number): Buffer {
 }
 
 describe("Takumi WASM 图片渲染", () => {
+  it("配图保持小图原尺寸、裁剪模式填框，卡片高度按实际内容变化", async () => {
+    const ctx = renderingContext();
+    Object.defineProperty(ctx, "http", { value: { get: async () => Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64",
+    ) } });
+    const activity = {
+      id: "1", authorId: "1", username: "test", fullname: "测试", kind: "post" as const,
+      text: "小图不放大", createdAt: new Date("2026-09-16T00:00:00Z"), url: "https://x.com/test/status/1",
+      media: [{ kind: "image" as const, url: "https://example.com/one.png" }],
+    };
+    const normal = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50 });
+    const cropped = createTakumiRenderer(ctx, new Logger("test"), { format: "png", quality: 50, mediaCrop: true });
+    const empty = await normal.renderActivity(activity, false);
+    const small = await normal.renderActivity(activity, true);
+    const crop = await cropped.renderActivity(activity, true);
+    expect(pngHeight(small) - pngHeight(empty)).toBe(23);
+    expect(pngHeight(crop) - pngHeight(small)).toBe(332);
+    const user = { id: "1", username: "test", fullname: "测试" };
+    const [recentSmall] = await normal.renderRecentActivities(user, [activity]);
+    const [recentCrop] = await cropped.renderRecentActivities(user, [activity]);
+    expect(pngHeight(recentCrop!) - pngHeight(recentSmall!)).toBe(332);
+  });
   it("渲染 X 风格推文卡片", async () => {
     const renderer = createTakumiRenderer(
       renderingContext(),
@@ -44,13 +77,66 @@ describe("Takumi WASM 图片渲染", () => {
       createdAt: new Date("2026-09-15T07:07:26.000Z"),
       url: "https://x.com/thsottiaux/status/2099756963429245110",
       media: [],
+    }, false);
+    expect(renderer.mimeType).toBe("image/jpeg");
+    expectJpeg(image);
+  });
+
+  it("单条推送仅在媒体开关开启时下载并渲染图片", async () => {
+    const ctx = renderingContext();
+    const downloaded: string[] = [];
+    const mediaUrl = "https://media.example/shijiu.jpg";
+    Object.defineProperty(ctx, "http", {
+      value: {
+        get: async (url: string) => {
+          downloaded.push(url);
+          return Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+          );
+        },
+      },
     });
-    expectPng(image);
+    const renderer = createTakumiRenderer(ctx, new Logger("takumi-test"));
+    const activity = {
+      id: "2100064631964540999",
+      authorId: "42",
+      username: "Shijiu_bai",
+      fullname: "詩玖",
+      kind: "post" as const,
+      text: "这期我想不出文案了",
+      createdAt: new Date("2026-09-16T03:30:00.000Z"),
+      url: "https://x.com/Shijiu_bai/status/2100064631964540999",
+      media: [{ kind: "image" as const, url: mediaUrl }],
+    };
+
+    const withoutMedia = await renderer.renderActivity(activity, false);
+    expectJpeg(withoutMedia);
+    expect(downloaded).toEqual([]);
+
+    const withMedia = await renderer.renderActivity(activity, true);
+    expectJpeg(withMedia);
+    expect(downloaded).toEqual([mediaUrl]);
+    expect(withMedia.length).toBeGreaterThan(withoutMedia.length);
   });
 
   it("渲染频道订阅表格", async () => {
+    const ctx = renderingContext();
+    const downloaded: string[] = [];
+    const avatarUrl = "https://avatars.example/thsottiaux.png";
+    Object.defineProperty(ctx, "http", {
+      value: {
+        get: async (url: string) => {
+          downloaded.push(url);
+          return Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+          );
+        },
+      },
+    });
     const renderer = createTakumiRenderer(
-      renderingContext(),
+      ctx,
       new Logger("takumi-test"),
     );
     const now = new Date("2026-09-15T07:07:26.000Z");
@@ -63,6 +149,7 @@ describe("Takumi WASM 图片渲染", () => {
       twitter_fullname: "Tibo",
       twitter_username: "thsottiaux",
       twitter_id: "42",
+      twitter_avatar_url: avatarUrl,
       last_tweet_id: "2099756963429245110",
       filter_regexp: "release|model",
       media: true,
@@ -73,13 +160,15 @@ describe("Takumi WASM 图片渲染", () => {
       create_at: now,
       update_at: now,
     }]);
-    expectPng(image);
+    expectJpeg(image);
+    expect(downloaded).toEqual([avatarUrl]);
   });
 
   it("最近动态每十条分页并支持多媒体占位宫格", async () => {
     const renderer = createTakumiRenderer(
       renderingContext(),
       new Logger("takumi-test"),
+      { format: "png", quality: 50 },
     );
     const activities = Array.from({ length: 11 }, (_value, index) => ({
       id: String(500 - index),
@@ -159,8 +248,38 @@ describe("Takumi WASM 图片渲染", () => {
     }, [activity]);
 
     expect(pages).toHaveLength(1);
-    expectPng(pageAt(pages, 0));
+    expectJpeg(pageAt(pages, 0));
     expect(downloaded).toEqual(["https://video/shared.mp4"]);
     expect(frameCalls).toBe(1);
+  });
+
+  it("支持 WebP 输出并标注正确 MIME", async () => {
+    const renderer = createTakumiRenderer(
+      renderingContext(),
+      new Logger("takumi-test"),
+      { format: "webp", quality: 50 },
+    );
+    const image = await renderer.renderActivity({
+      id: "900",
+      authorId: "42",
+      username: "OpenAI",
+      fullname: "OpenAI",
+      kind: "post",
+      text: "webp output",
+      createdAt: new Date("2026-09-15T07:07:26.000Z"),
+      url: "https://x.com/OpenAI/status/900",
+      media: [],
+    }, false);
+    expect(renderer.mimeType).toBe("image/webp");
+    expectWebp(image);
+  });
+
+  it("渲染插件总览帮助图片", async () => {
+    const renderer = createTakumiRenderer(
+      renderingContext(),
+      new Logger("takumi-test"),
+    );
+    const image = await renderer.renderHelp();
+    expectJpeg(image);
   });
 });

@@ -10,6 +10,8 @@ import {
 } from "../src/commands";
 import { extendWatcherTable } from "../src/database";
 import { failure, sourceError, success } from "../src/domain";
+import type { WatcherAvatarRefreshMode } from "../src/config";
+import { legacyMessageOutput, type MessageOutput } from "../src/output";
 import type { XDataSourceService } from "../src/services";
 
 interface CommandOptions {
@@ -39,8 +41,10 @@ async function createEnvironment(
   latestDefaultUsername = "amsrntk3",
   enableQuote = false,
   recentDefaultUsername = "OpenAI",
-  recentDefaultCount = 10,
+  recentDefaultCount = 5,
   enableWaitingHint = false,
+  watcherAvatarRefreshMode: WatcherAvatarRefreshMode = "cache",
+  output: MessageOutput = legacyMessageOutput,
 ): Promise<CommandEnvironment> {
   const directory = mkdtempSync(join(tmpdir(), "x-watcher-command-"));
   const ctx = new Context();
@@ -58,6 +62,7 @@ async function createEnvironment(
         id: "42",
         username: handle,
         fullname: "Example User",
+        avatarUrl: `https://avatars.example/${handle}.png`,
       });
     },
     fetchBaseline: async () => {
@@ -102,6 +107,8 @@ async function createEnvironment(
       recentDefaultUsername,
       recentDefaultCount,
       enableWaitingHint,
+      watcherAvatarRefreshMode,
+      output,
     }
     : {
       source,
@@ -115,6 +122,8 @@ async function createEnvironment(
       recentDefaultUsername,
       recentDefaultCount,
       enableWaitingHint,
+      watcherAvatarRefreshMode,
+      output,
     };
   registerCommands(
     ctx,
@@ -140,6 +149,7 @@ interface CommandTrace {
   readonly replies: string[];
   readonly deleted: string[];
   readonly events: string[];
+  readonly channels: string[];
 }
 
 async function executeCommandWithTrace(
@@ -152,6 +162,7 @@ async function executeCommandWithTrace(
   const replies: string[] = [];
   const deleted: string[] = [];
   const events: string[] = [];
+  const channels: string[] = [];
   const session = {
     platform: "test",
     channelId,
@@ -159,12 +170,14 @@ async function executeCommandWithTrace(
     messageId: "trigger-message",
     bot: {
       selfId: "bot",
+      sendMessage: async () => { throw new Error("查询指令不允许绕过当前 session 发送"); },
       deleteMessage: async (_channelId: string, messageId: string) => {
         deleted.push(messageId);
         events.push(`delete:${messageId}`);
       },
     },
     send: async (message: string) => {
+      channels.push(channelId);
       replies.push(message);
       const messageId = `sent-${replies.length}`;
       events.push(`send:${messageId}`);
@@ -174,7 +187,7 @@ async function executeCommandWithTrace(
   const command = ctx.$commander.get(name);
   // @ts-expect-error 这里只注入命令实际读取的最小 Session 字段
   await command.execute({ session, args: [...args], options: { ...options } });
-  return { replies, deleted, events };
+  return { replies, deleted, events, channels };
 }
 
 afterEach(async () => {
@@ -185,6 +198,20 @@ afterEach(async () => {
 });
 
 describe("公开命令契约", () => {
+  it.each([false, true])("多频道订阅时 xla/xre 只回复触发频道，引用开关=%s", async (quote) => {
+    const { ctx } = await createEnvironment("polling", null, "amsrntk3", quote);
+    await executeCommand(ctx, "xwatch", "channel-a", ["OpenAI"]);
+    await executeCommand(ctx, "xwatch", "channel-b", ["OpenAI"]);
+    const before = await ctx.database.get("x_watcher", {});
+    for (const command of ["xla", "xre"]) {
+      const trace = await executeCommandWithTrace(ctx, command, "channel-c", ["OpenAI"]);
+      expect(trace.channels).toEqual(["channel-c"]);
+      expect(trace.replies[0]).toContain(command === "xla" ? "latest post" : "recent-0");
+      expect(trace.replies[0]?.includes('<quote id="trigger-message"/>')).toBe(quote);
+      expect((trace.replies[0]?.match(/<quote/g) ?? []).length).toBe(quote ? 1 : 0);
+    }
+    expect(await ctx.database.get("x_watcher", {})).toEqual(before);
+  });
   it("再次 watch 完整覆盖正则和三个布尔开关且不依赖远端", async () => {
     const { ctx, calls } = await createEnvironment();
     const now = new Date("2026-01-01T00:00:00.000Z");
@@ -323,6 +350,84 @@ describe("公开命令契约", () => {
     expect(replies[0]).toContain("release\\|model next");
   });
 
+  it("xlist 默认补查缺失头像并缓存", async () => {
+    const { ctx, calls } = await createEnvironment();
+    await executeCommand(ctx, "x-watcher.watch", "channel-a", ["Example"]);
+    await ctx.database.set(
+      "x_watcher",
+      { channelId: "channel-a" },
+      { twitter_avatar_url: null },
+    );
+
+    await executeCommand(ctx, "x-watcher.list", "channel-a", []);
+
+    const rows = await ctx.database.get("x_watcher", { channelId: "channel-a" });
+    expect(calls.resolved).toBe(2);
+    expect(rows[0] === undefined ? null : rows[0].twitter_avatar_url)
+      .toBe("https://avatars.example/Example.png");
+  });
+
+  it("xlist 占位策略不会补查缺失头像", async () => {
+    const { ctx, calls } = await createEnvironment(
+      "polling",
+      null,
+      "amsrntk3",
+      false,
+      "OpenAI",
+      3,
+      false,
+      "placeholder",
+    );
+    await executeCommand(ctx, "x-watcher.watch", "channel-a", ["Example"]);
+    await ctx.database.set(
+      "x_watcher",
+      { channelId: "channel-a" },
+      { twitter_avatar_url: null },
+    );
+
+    await executeCommand(ctx, "x-watcher.list", "channel-a", []);
+
+    const rows = await ctx.database.get("x_watcher", { channelId: "channel-a" });
+    expect(calls.resolved).toBe(1);
+    expect(rows[0] === undefined ? null : rows[0].twitter_avatar_url).toBeNull();
+  });
+
+  it("xlist 强制刷新头像，补查失败仍正常输出列表", async () => {
+    const { ctx, source } = await createEnvironment(
+      "polling",
+      null,
+      "amsrntk3",
+      false,
+      "OpenAI",
+      3,
+      false,
+      "always",
+    );
+    await executeCommand(ctx, "x-watcher.watch", "channel-a", ["Example"]);
+    Object.defineProperty(source, "resolveUser", {
+      value: async () => success({
+        id: "42",
+        username: "Example",
+        fullname: "Example User",
+        avatarUrl: "https://avatars.example/refreshed.png",
+      }),
+    });
+
+    await executeCommand(ctx, "x-watcher.list", "channel-a", []);
+    let rows = await ctx.database.get("x_watcher", { channelId: "channel-a" });
+    expect(rows[0] === undefined ? null : rows[0].twitter_avatar_url)
+      .toBe("https://avatars.example/refreshed.png");
+
+    Object.defineProperty(source, "resolveUser", {
+      value: async () => failure(sourceError("twitterapiio", "transport", "offline")),
+    });
+    const replies = await executeCommand(ctx, "x-watcher.list", "channel-a", []);
+    rows = await ctx.database.get("x_watcher", { channelId: "channel-a" });
+    expect(replies[0]).toContain("当前订阅的 X/Twitter 用户");
+    expect(rows[0] === undefined ? null : rows[0].twitter_avatar_url)
+      .toBe("https://avatars.example/refreshed.png");
+  });
+
   it("WebSocket 远端同步失败时明确提示本地订阅已保存", async () => {
     const { ctx } = await createEnvironment(
       "websocket",
@@ -410,16 +515,29 @@ describe("公开命令契约", () => {
     expect(ctx.$commander.get("xla")).toBeDefined();
     expect(ctx.$commander.get("xrecent")).toBeDefined();
     expect(ctx.$commander.get("xre")).toBeDefined();
+    expect(ctx.$commander.get("xhe")).toBeDefined();
     expect(ctx.$commander.get("watch")).toBeUndefined();
     expect(ctx.$commander.get("unwatch")).toBeUndefined();
     await ctx.database.get("x_watcher", {});
   });
 
-  it("xrecent 默认查询 OpenAI 且推文和回复各取 10 条", async () => {
+  it("xhe 输出插件总览帮助", async () => {
+    const { ctx } = await createEnvironment();
+    const replies = await executeCommand(ctx, "x-watcher.help", "channel-a", []);
+    expect(replies[0]).toContain("X Watcher 指令帮助");
+    expect(replies[0]).toContain("xwatch &lt;twitter_username&gt; [regexp]");
+    expect(replies[0]).toContain("xlatest [twitter_username]");
+
+    const aliasReplies = await executeCommand(ctx, "xhe", "channel-a", []);
+    expect(aliasReplies[0]).toContain("xrecent [twitter_username]");
+  });
+
+
+  it("xrecent 默认查询 OpenAI 且推文和回复各取 5 条", async () => {
     const { ctx, calls } = await createEnvironment();
     const replies = await executeCommand(ctx, "x-watcher.recent", "channel-a", []);
     expect(replies[0]).toContain("@OpenAI");
-    expect(replies[0]).toContain("10 条推文，10 条回复");
+    expect(replies[0]).toContain("5 条推文，5 条回复");
     expect(calls.recent).toBe(1);
   });
 
@@ -562,11 +680,13 @@ describe("公开命令契约", () => {
       [],
       { count: 1 },
     );
+    const helpReplies = await executeCommand(ctx, "xhe", "channel-a", []);
     for (const message of [
       ...watchReplies,
       ...listReplies,
       ...latestReplies,
       ...recentReplies,
+      ...helpReplies,
     ]) {
       expect(message.startsWith('<quote id="trigger-message"/>')).toBe(true);
     }

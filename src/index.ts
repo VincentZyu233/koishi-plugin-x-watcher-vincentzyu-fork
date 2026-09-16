@@ -1,17 +1,27 @@
 import { Context, Logger } from "koishi";
 import { registerCommands } from "./commands";
-import { Config, type Config as PluginConfig } from "./config";
+import {
+  Config,
+  type Config as PluginConfig,
+  type WatcherAvatarRefreshMode,
+} from "./config";
 import { extendWatcherTable, migrateWatcherTable } from "./database";
 import { createRettiwtDataSource } from "./providers/rettiwt";
 import { createTwitterAccountStreamService } from "./providers/stream";
 import { createTwitterApiDataSource } from "./providers/twitterapi";
 import { installProxy } from "./proxy";
-import { createMessageOutput, legacyMessageOutput, type MessageOutput } from "./output";
+import {
+  createMessageOutput,
+  outputCapabilities,
+  type MessageOutput,
+} from "./output";
 import { createTakumiRenderer } from "./render/takumi";
+import { createAttachmentOutput, createMediaDownload } from "./media";
+import { createImageLimiter } from "./render/image";
 import { createAccountStreamRuntime, createPollingRuntime, type PluginRuntime } from "./runtime";
 
 export const name = "x-watcher";
-export const inject = { required: ["database", "http"], optional: ["ffmpeg"] };
+export const inject = { required: ["database", "http", "ffmpeg"] };
 export { Config };
 
 export const usage = `
@@ -29,6 +39,7 @@ export const usage = `
 - 使用 \`xwatch [-m] [--quote] [--retweet] <username> [regexp]\` 订阅动态，
 - 使用 \`xun <username>\` 或 \`xunwatch <username>\` 软取消
 - 使用 \`xlist\` 查看当前频道订阅。
+- 使用 \`xhe\` 查看插件全部指令与选项总览。
 - 使用 \`xlatest [username] [-t post|reply]\` 即时获取指定用户的最新推文或回复；省略用户名时查询配置的默认账号。
 - 使用 \`xrecent [username] [-c count]\` 获取指定用户最近的推文和回复；数量表示每类各取 N 条。
 
@@ -51,6 +62,7 @@ function commandDependencies(
   recentDefaultCount: number,
   enableQuote: boolean,
   enableWaitingHint: boolean,
+  watcherAvatarRefreshMode: WatcherAvatarRefreshMode,
 ) {
   if (runtime.mode === "polling") {
     return {
@@ -64,6 +76,7 @@ function commandDependencies(
       recentDefaultCount,
       enableQuote,
       enableWaitingHint,
+      watcherAvatarRefreshMode,
     };
   }
   return {
@@ -77,6 +90,7 @@ function commandDependencies(
     recentDefaultCount,
     enableQuote,
     enableWaitingHint,
+    watcherAvatarRefreshMode,
   };
 }
 
@@ -90,8 +104,8 @@ function createRuntime(
   const delivery = {
     output,
     activityTypes: config.activityTypes ?? ["post", "reply"],
-    maxPostCount: config.maxPostCount ?? 10,
-    maxReplyCount: config.maxReplyCount ?? 10,
+    maxPostCount: config.maxPostCount ?? 5,
+    maxReplyCount: config.maxReplyCount ?? 5,
   };
   if (config.provider === "rettiwt") {
     const source = createRettiwtDataSource({
@@ -143,17 +157,32 @@ export function apply(ctx: Context, config: PluginConfig): void {
 
   try {
     const proxy = config.provider === "rettiwt"
-      ? installProxy(config.proxy, logger)
+      ? installProxy({
+        enabled: config.enableProxy ?? false,
+        url: config.proxyUrl ?? "http://127.0.0.1:7890",
+      }, logger)
       : { rettiwtProxy: undefined, dispose: () => undefined };
     disposeProxy = proxy.dispose;
-    const outputFormats = config.outputFormats ?? ["image", "text"];
-    const output = outputFormats.includes("image")
-      ? createMessageOutput(
-        outputFormats,
-        createTakumiRenderer(ctx, logger),
-        logger,
-      )
-      : legacyMessageOutput;
+    const mode = config.outputMode ?? "card-text";
+    const limiter = createImageLimiter(ctx, logger, config.takumiImageMaxSizeMiB ?? 5);
+    const download = createMediaDownload(ctx, {
+      enabled: config.enableProxy ?? false,
+      url: config.proxyUrl ?? "http://127.0.0.1:7890",
+    });
+    const output = createMessageOutput(
+      mode,
+      outputCapabilities(mode).card ? createTakumiRenderer(ctx, logger, {
+        format: config.takumiImageFormat ?? "jpg",
+        quality: config.takumiImageQuality ?? 50,
+        mediaMaxWidth: config.takumiMediaMaxWidth ?? 666,
+        mediaMaxHeight: config.takumiMediaMaxHeight ?? 333,
+        mediaCrop: config.takumiMediaCrop ?? false,
+        mediaLayout: config.takumiMediaLayout ?? "grid-2",
+      }) : null,
+      logger,
+      limiter,
+      createAttachmentOutput(ctx, logger, download, limiter),
+    );
     runtime = createRuntime(ctx, config, proxy.rettiwtProxy, output);
     registerCommands(
       ctx,
@@ -163,9 +192,10 @@ export function apply(ctx: Context, config: PluginConfig): void {
         output,
         config.latestDefaultUsername ?? "amsrntk3",
         config.recentDefaultUsername ?? "OpenAI",
-        config.recentDefaultCount ?? 10,
+        config.recentDefaultCount ?? 5,
         config.enableQuote ?? true,
         config.enableWaitingHint ?? true,
+        config.watcherAvatarRefreshMode ?? "cache",
       ),
       logger,
     );

@@ -68,10 +68,22 @@ describe("显式代理生命周期", () => {
     }
   });
 
-  it("拒绝原生 fetch 无法使用的代理协议", () => {
-    expect(() => installProxy({
+  it("支持 SOCKS5 代理并在卸载时恢复 dispatcher", () => {
+    const previous = getGlobalDispatcher();
+    const lease = installProxy({
       enabled: true,
       url: "socks5://127.0.0.1:7890",
-    }, logger())).toThrow("仅支持 http:// 或 https://");
+    }, logger());
+    expect(lease.rettiwtProxy).toBe("socks5://127.0.0.1:7890");
+    expect(getGlobalDispatcher()).not.toBe(previous);
+    lease.dispose();
+    expect(getGlobalDispatcher()).toBe(previous);
+  });
+
+  it("拒绝不受支持的代理协议", () => {
+    expect(() => installProxy({
+      enabled: true,
+      url: "ftp://127.0.0.1:7890",
+    }, logger())).toThrow("仅支持 HTTP(S) 或 SOCKS5");
   });
 });

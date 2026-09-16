@@ -11,6 +11,7 @@ export interface WatcherRecord {
   readonly twitter_fullname: string;
   readonly twitter_username: string;
   readonly twitter_id: string;
+  readonly twitter_avatar_url?: string | null;
   readonly last_tweet_id: string | null;
   readonly filter_regexp: string | null;
   readonly media: boolean;
@@ -41,6 +42,7 @@ export function extendWatcherTable(ctx: Context): void {
       twitter_fullname: "string",
       twitter_username: "string",
       twitter_id: "string",
+      twitter_avatar_url: "string",
       last_tweet_id: "string",
       filter_regexp: "string",
       media: "boolean",

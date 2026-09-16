@@ -4,8 +4,8 @@ import {
   getGlobalDispatcher,
   ProxyAgent,
   setGlobalDispatcher,
+  Socks5ProxyAgent,
 } from "undici";
-import type { ProxyConfig } from "./config";
 
 /** 显式代理同时覆盖 Rettiwt Axios 请求与其依赖中的原生 fetch。 */
 export interface ProxyLease {
@@ -13,9 +13,14 @@ export interface ProxyLease {
   readonly dispose: () => void;
 }
 
+export interface ProxyOptions {
+  readonly enabled: boolean;
+  readonly url: string;
+}
+
 interface ActiveProxy {
   readonly url: string;
-  readonly dispatcher: ProxyAgent;
+  readonly dispatcher: Dispatcher;
   readonly previous: Dispatcher;
   references: number;
 }
@@ -29,13 +34,21 @@ function normalizeProxyUrl(value: string): string {
   } catch {
     throw new Error("代理地址不是有效 URL");
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("代理仅支持 http:// 或 https:// 地址");
+  if (!["http:", "https:", "socks:", "socks5:"].includes(url.protocol)) {
+    throw new Error("代理仅支持 HTTP(S) 或 SOCKS5 地址");
   }
   if (url.hostname.length === 0) {
     throw new Error("代理地址缺少主机名");
   }
   return url.href;
+}
+
+export function createDispatcher(value: string): Dispatcher {
+  const url = normalizeProxyUrl(value);
+  const protocol = new URL(url).protocol;
+  return protocol === "socks:" || protocol === "socks5:"
+    ? new Socks5ProxyAgent(url)
+    : new ProxyAgent(url);
 }
 
 function proxyLabel(value: string): string {
@@ -66,7 +79,7 @@ function createLease(active: ActiveProxy, logger: Logger): ProxyLease {
 }
 
 export function installProxy(
-  config: ProxyConfig,
+  config: ProxyOptions,
   logger: Logger,
 ): ProxyLease {
   if (!config.enabled) {
@@ -82,14 +95,14 @@ export function installProxy(
       throw new Error("全局 fetch dispatcher 已被其他组件替换");
     }
     activeProxy.references += 1;
-    logger.info(`复用显式代理：${proxyLabel(proxyUrl)}`);
+    logger.info(`复用代理：${proxyLabel(proxyUrl)}`);
     return createLease(activeProxy, logger);
   }
 
   const previous = getGlobalDispatcher();
-  const dispatcher = new ProxyAgent(proxyUrl);
+  const dispatcher = createDispatcher(proxyUrl);
   setGlobalDispatcher(dispatcher);
-  logger.info(`已启用显式代理：${proxyLabel(proxyUrl)}`);
+  logger.info(`已启用代理：${proxyLabel(proxyUrl)}`);
   activeProxy = { url: proxyUrl, dispatcher, previous, references: 1 };
   return createLease(activeProxy, logger);
 }

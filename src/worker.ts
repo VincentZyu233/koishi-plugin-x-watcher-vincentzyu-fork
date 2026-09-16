@@ -1,3 +1,4 @@
+import { errorMessage } from "./errors";
 import type { Context, Logger } from "koishi";
 import type { PushActivityType } from "./config";
 import {
@@ -181,7 +182,7 @@ async function processWatcherActivities(
         const message = await delivery.output.activity(activity, current.media);
         await bot.sendMessage(current.channelId, message);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`推送动态 ${activity.id} 失败：${message}`);
         return false;
       }
@@ -439,7 +440,7 @@ export function createPollingRunner(
         delivery,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error instanceof Error ? error : String(error));
       logger.error(`X 动态检查失败：${message}`);
     } finally {
       running = false;

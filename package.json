@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-x-watcher-vincentzyu-fork",
   "description": "🐦📡 通过 Rettiwt 或 TwitterAPI.io 订阅指定 X/Twitter 用户动态 🔔",
-  "version": "0.3.0-beta.3+20260916",
+  "version": "0.3.2-beta.5+20260916",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -33,6 +33,7 @@
     "@takumi-rs/helpers": "^1.8.7",
     "@takumi-rs/wasm": "^1.8.7",
     "axios": "^1.8.4",
+    "image-size": "^2.0.2",
     "rettiwt-api": "7.1.2",
     "undici": "^7.28.0",
     "zod": "^4.4.3"
@@ -54,9 +55,7 @@
     "service": {
       "required": [
         "database",
-        "http"
-      ],
-      "optional": [
+        "http",
         "ffmpeg"
       ]
     }

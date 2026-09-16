@@ -1,3 +1,4 @@
+import { errorMessage } from "./errors";
 import { h, type Context, type Logger, type Session } from "koishi";
 import {
   canonicalHandle,
@@ -10,6 +11,7 @@ import {
   getChannelWatchers,
   type WatcherRecord,
 } from "./database";
+import type { WatcherAvatarRefreshMode } from "./config";
 import { legacyMessageOutput, type MessageOutput } from "./output";
 import type { XDataSourceService } from "./services";
 
@@ -23,6 +25,7 @@ interface CommandDependencyBase {
   readonly recentDefaultCount?: number;
   readonly enableQuote?: boolean;
   readonly enableWaitingHint?: boolean;
+  readonly watcherAvatarRefreshMode?: WatcherAvatarRefreshMode;
 }
 
 /** 命令依赖保持模式与远端 monitor 能力的判别关系。 */
@@ -49,6 +52,8 @@ interface SessionAddress {
   readonly botId: string;
 }
 
+type CommandReply = (session: Session, message: string) => Promise<void>;
+
 /** 为当前插件实例创建统一命令回复；主动推送不会经过这里。 */
 function commandQuote(dependencies: CommandDependencies, session: Session): string {
   return dependencies.enableQuote === true
@@ -64,6 +69,10 @@ function createCommandReply(dependencies: CommandDependencies) {
   };
 }
 
+function messageOutput(dependencies: CommandDependencies): MessageOutput {
+  return dependencies.output ?? legacyMessageOutput;
+}
+
 /** 等待提示属于辅助反馈，发送失败不能阻断真正的查询。 */
 async function sendWaitingHint(
   session: Session,
@@ -76,7 +85,7 @@ async function sendWaitingHint(
     const messageIds = await session.send(`${commandQuote(dependencies, session)}${message}`);
     return messageIds[0] ?? null;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error instanceof Error ? error : String(error));
     logger.warn(`发送等待提示失败，继续执行查询：${detail}`);
     return null;
   }
@@ -92,7 +101,7 @@ async function retractWaitingHint(
   try {
     await session.bot.deleteMessage(session.channelId, messageId);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error instanceof Error ? error : String(error));
     logger.warn(`撤回等待提示失败：${detail}`);
   }
 }
@@ -122,10 +131,19 @@ function normalizeFilterInput(regexp: string | undefined): string | null {
 
 /** 从数据库订阅还原稳定用户资料。 */
 function userFromWatcher(watcher: WatcherRecord): XUser {
+  const avatarUrl = watcher.twitter_avatar_url;
+  if (avatarUrl === undefined || avatarUrl === null) {
+    return {
+      id: watcher.twitter_id,
+      username: watcher.twitter_username,
+      fullname: watcher.twitter_fullname,
+    };
+  }
   return {
     id: watcher.twitter_id,
     username: watcher.twitter_username,
     fullname: watcher.twitter_fullname,
+    avatarUrl,
   };
 }
 
@@ -179,6 +197,7 @@ async function updateExistingWatcher(
   baseline: string | null,
 ): Promise<void> {
   const now = new Date();
+  const avatarUrl = user.avatarUrl;
   await ctx.database.set(
     "x_watcher",
     {
@@ -199,6 +218,9 @@ async function updateExistingWatcher(
       active: true,
       enabled_at: reactivate ? now : watcher.enabled_at,
       update_at: now,
+      ...(avatarUrl === undefined || avatarUrl.length === 0
+        ? {}
+        : { twitter_avatar_url: avatarUrl }),
     },
   );
 }
@@ -221,6 +243,7 @@ async function createWatcher(
     twitter_fullname: user.fullname,
     twitter_username: user.username,
     twitter_id: user.id,
+    twitter_avatar_url: user.avatarUrl ?? null,
     last_tweet_id: baseline,
     filter_regexp: filter,
     media: options.media,
@@ -231,6 +254,52 @@ async function createWatcher(
     create_at: now,
     update_at: now,
   });
+}
+
+/** 按配置为列表补齐订阅头像，任何单条失败都不影响列表本身。 */
+async function refreshWatcherAvatars(
+  ctx: Context,
+  source: XDataSourceService,
+  watchers: ReadonlyArray<WatcherRecord>,
+  mode: WatcherAvatarRefreshMode,
+  logger: Logger,
+): Promise<WatcherRecord[]> {
+  if (mode === "placeholder") return [...watchers];
+  const refreshed: WatcherRecord[] = [];
+  for (const watcher of watchers) {
+    const cachedUrl = watcher.twitter_avatar_url;
+    const needsRefresh = mode === "always"
+      || cachedUrl === undefined
+      || cachedUrl === null
+      || cachedUrl.length === 0;
+    if (!needsRefresh) {
+      refreshed.push(watcher);
+      continue;
+    }
+    const resolved = await source.resolveUser(watcher.twitter_username);
+    if (!resolved.ok) {
+      logger.warn(`xlist 补查 @${watcher.twitter_username} 头像失败：${resolved.error.message}`);
+      refreshed.push(watcher);
+      continue;
+    }
+    const avatarUrl = resolved.value.avatarUrl;
+    if (avatarUrl === undefined || avatarUrl.length === 0) {
+      refreshed.push(watcher);
+      continue;
+    }
+    try {
+      await ctx.database.set(
+        "x_watcher",
+        { id: watcher.id },
+        { twitter_avatar_url: avatarUrl },
+      );
+    } catch (error) {
+      const message = errorMessage(error instanceof Error ? error : String(error));
+      logger.warn(`xlist 缓存 @${watcher.twitter_username} 头像失败：${message}`);
+    }
+    refreshed.push({ ...watcher, twitter_avatar_url: avatarUrl });
+  }
+  return refreshed;
 }
 
 /** 注册新增和完整更新订阅的 watch 命令。 */
@@ -386,7 +455,7 @@ function registerWatchCommand(
           `已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`watch 命令失败：${message}`);
         await reply(session, "订阅失败，请稍后重试");
       }
@@ -465,7 +534,7 @@ function registerUnwatchCommand(
           `已取消 ${target.twitter_username} 的订阅${remote}`,
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`unwatch 命令失败：${message}`);
         await reply(session, "取消订阅失败，请稍后重试");
       }
@@ -485,6 +554,7 @@ function registerListCommand(
     .alias("xls")
     .action(async ({ session }) => {
       if (session === undefined) return;
+      const output = messageOutput(dependencies);
       const address = sessionAddress(session);
       if (address === null) {
         await reply(session, "当前会话缺少频道或用户标识，无法读取订阅");
@@ -496,10 +566,17 @@ function registerListCommand(
           address.platform,
           address.channelId,
         );
-        const output = dependencies.output ?? legacyMessageOutput;
-        await reply(session, await output.watcherList(watchers));
+        const mode = dependencies.watcherAvatarRefreshMode ?? "cache";
+        const watchersWithAvatars = await refreshWatcherAvatars(
+          ctx,
+          dependencies.source,
+          watchers,
+          mode,
+          logger,
+        );
+        await reply(session, await output.watcherList(watchersWithAvatars));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xlist 命令失败：${message}`);
         await reply(session, "获取订阅列表失败，请稍后重试");
       }
@@ -523,6 +600,7 @@ function registerLatestCommand(
     .alias("xla")
     .action(async ({ session, options }, twitterUsername) => {
       if (session === undefined) return;
+      const output = messageOutput(dependencies);
       const defaultUsername = dependencies.latestDefaultUsername ?? "amsrntk3";
       const parsedHandle = normalizeHandle(twitterUsername ?? defaultUsername);
       if (!parsedHandle.ok) {
@@ -564,10 +642,9 @@ function registerLatestCommand(
           );
           return;
         }
-        const output = dependencies.output ?? legacyMessageOutput;
         await reply(session, await output.activity(latest.value, true));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xlatest 命令失败：${message}`);
         await reply(session, "获取最新动态失败，请稍后重试");
       } finally {
@@ -593,13 +670,14 @@ function registerRecentCommand(
     .alias("xre")
     .action(async ({ session, options }, twitterUsername) => {
       if (session === undefined) return;
+      const output = messageOutput(dependencies);
       const defaultUsername = dependencies.recentDefaultUsername ?? "OpenAI";
       const parsedHandle = normalizeHandle(twitterUsername ?? defaultUsername);
       if (!parsedHandle.ok) {
         await reply(session, parsedHandle.error);
         return;
       }
-      const configuredCount = dependencies.recentDefaultCount ?? 10;
+      const configuredCount = dependencies.recentDefaultCount ?? 5;
       const count = options === undefined || options.count === undefined
         ? configuredCount
         : options.count;
@@ -632,15 +710,30 @@ function registerRecentCommand(
           await reply(session, `未找到 @${user.value.username} 最近的推文或回复`);
           return;
         }
-        const output = dependencies.output ?? legacyMessageOutput;
         await reply(session, await output.recentActivities(user.value, recent.value));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`xrecent 命令失败：${message}`);
         await reply(session, "获取最近动态失败，请稍后重试");
       } finally {
         await retractWaitingHint(session, logger, waitingHintId);
       }
+    });
+}
+
+/** 注册插件总览帮助，复用消息格式和引用段策略。 */
+function registerHelpCommand(
+  ctx: Context,
+  dependencies: CommandDependencies,
+): void {
+  const reply = createCommandReply(dependencies);
+  ctx
+    .command("x-watcher.help", "查看 X/Twitter 插件指令帮助")
+    .alias("xhe")
+    .action(async ({ session }) => {
+      if (session === undefined) return;
+      const output = messageOutput(dependencies);
+      await reply(session, await output.help());
     });
 }
 
@@ -653,6 +746,7 @@ export function registerCommands(
   registerWatchCommand(ctx, dependencies, logger);
   registerUnwatchCommand(ctx, dependencies, logger);
   registerListCommand(ctx, dependencies, logger);
+  registerHelpCommand(ctx, dependencies);
   registerLatestCommand(ctx, dependencies, logger);
   registerRecentCommand(ctx, dependencies, logger);
 }

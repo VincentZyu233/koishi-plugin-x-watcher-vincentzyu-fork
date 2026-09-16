@@ -50,7 +50,7 @@ describe("插件生命周期", () => {
       mode: "polling" as const,
       apiKey: "offline-test-key",
       interval: 5,
-      outputFormats: ["text" as const],
+      outputMode: "text" as const,
     };
     const firstPlugin = { apply };
     const firstScope = ctx.plugin(firstPlugin, config);
@@ -82,7 +82,7 @@ describe("插件生命周期", () => {
     // // @ts-expect-error 验证 Koishi Schema 会补齐默认的 provider、mode 和 interval
     const config = Config({
       apiKeys: ["offline-constructor-test-key"],
-      outputFormats: ["text"],
+      outputMode: "text",
     });
 
     apply(ctx, config);
@@ -109,7 +109,7 @@ describe("插件生命周期", () => {
       mode: "polling",
       apiKey: "offline-test-key",
       interval: 5,
-      outputFormats: ["text"],
+      outputMode: "text",
     });
     await waitFor(() => get.mock.calls.length > 0);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -143,7 +143,7 @@ describe("插件生命周期", () => {
       mode: "polling",
       apiKey: "offline-test-key",
       interval: 5,
-      outputFormats: ["text"],
+      outputMode: "text",
     });
     await waitFor(() => pollingEntered);
 
