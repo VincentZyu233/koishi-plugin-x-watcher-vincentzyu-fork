@@ -32,7 +32,7 @@ export function helpCommands(defaults: HelpDefaults = {}): ReadonlyArray<HelpCom
   const count = defaults.recentDefaultCount ?? 5;
   return [
     {
-      name: "x-watcher.watch", emoji: "📡", syntax: "xwatch <twitter_username> [regexp]", aliases: ["xwa"],
+      name: "x-watcher.watch", emoji: "📡", syntax: "xwatch <twitter_username> [regexp]", aliases: ["xwa", "xwatch"],
       description: "订阅或完整更新当前会话的 X/Twitter 用户动态",
       options: [
         { key: "media", syntax: "-m", description: "包含推文媒体，默认关闭；卡片内展示媒体，仅附件模式另发图片，纯文本模式不发图片" },
@@ -47,27 +47,27 @@ export function helpCommands(defaults: HelpDefaults = {}): ReadonlyArray<HelpCom
       examples: ["xwa -m --quote --retweet OpenAI", "xwatch OpenAI GPT|模型"],
     },
     {
-      name: "x-watcher.unwatch", emoji: "🔕", syntax: "xun [--hard] <twitter_username>", aliases: ["xunwatch"],
+      name: "x-watcher.unwatch", emoji: "🔕", syntax: "xun [--hard] <twitter_username>", aliases: ["xun", "xunwatch"],
       description: "取消当前频道或私聊的用户订阅",
       options: [{ key: "hard", syntax: "--hard", description: "永久删除本地订阅记录；发起人在当前会话 30 秒内回复 y 确认，n、其他回复或超时取消" }],
       notes: ["用户名必填；默认软取消并保留记录，不影响其他频道。重新订阅从当前最新动态开始。", "硬取消可删除活跃或已取消记录，接受大小写 Y/N；删除后不再显示在 xlist，重新订阅创建新记录。"],
       examples: ["xun OpenAI", "xun --hard OpenAI"],
     },
     {
-      name: "x-watcher.list", emoji: "📋", syntax: "xlist", aliases: ["xls"],
+      name: "x-watcher.list", emoji: "📋", syntax: "xlist", aliases: ["xls", "xlist"],
       description: "查看当前频道或私聊的订阅列表", options: [],
       notes: ["包含已取消记录；展示账号、订阅状态、正文过滤正则、媒体开关、引用推文开关和转推开关。"],
       examples: ["xls"],
     },
     {
-      name: "x-watcher.latest", emoji: "🆕", syntax: "xlatest [twitter_username]", aliases: ["xla"],
+      name: "x-watcher.latest", emoji: "🆕", syntax: "xlatest [twitter_username]", aliases: ["xla", "xlatest"],
       description: "在当前会话查询最新推文或回复，不创建订阅",
       options: [{ key: "type", syntax: "-t, --type <type>", description: "可选 post＝原创推文、reply＝回复；默认 post，不支持 quote 或 retweet" }],
       notes: [`用户名可省略，当前默认：@${latest}。不改变订阅水位。`],
       examples: ["xla", "xla OpenAI -t reply"],
     },
     {
-      name: "x-watcher.recent", emoji: "🕒", syntax: "xrecent [twitter_username]", aliases: ["xre"],
+      name: "x-watcher.recent", emoji: "🕒", syntax: "xrecent [twitter_username]", aliases: ["xre", "xrecent"],
       description: "在当前会话查询最近推文和回复，不创建订阅",
       options: [{ key: "count", syntax: "-c, --count <count>", description: `1～50 的整数，当前默认 ${count}；分别限制推文和回复数量，-c 3 最多返回 3 条推文＋3 条回复` }],
       notes: [`用户名可省略，当前默认：@${recent}。不包含引用和转推，不改变订阅水位；没有 --type 选项。`],
