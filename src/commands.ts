@@ -1,3 +1,4 @@
+import { createWatcher, updateExistingWatcher, userFromWatcher, remoteSyncSuffix, withManagementLock, deactivateWatcher, deleteWatcher, type WatchOptions, type SessionAddress } from "./subscriptions";
 import { helpCommands, helpDescription, helpOption, HELP_COMMON } from "./help";
 import { errorMessage } from "./errors";
 import { h, type Context, type Logger, type Session } from "koishi";
@@ -6,7 +7,6 @@ import {
   compileFilter,
   normalizeHandle,
   success,
-  type XUser,
 } from "./domain";
 import {
   getChannelWatchers,
@@ -18,6 +18,7 @@ import type { XDataSourceService } from "./services";
 
 /** 命令共享的数据源和轮询提示间隔。 */
 interface CommandDependencyBase {
+  readonly canManage?: () => boolean;
   readonly source: XDataSourceService;
   readonly interval: number;
   readonly output?: MessageOutput;
@@ -37,21 +38,6 @@ export type CommandDependencies = CommandDependencyBase & (
       readonly synchronizeMonitors: () => Promise<boolean>;
     }
 );
-
-/** watch 命令的完整覆盖选项。 */
-interface WatchOptions {
-  readonly media: boolean;
-  readonly quote: boolean;
-  readonly retweet: boolean;
-}
-
-/** 命令执行所需的频道定位信息。 */
-interface SessionAddress {
-  readonly platform: string;
-  readonly channelId: string;
-  readonly userId: string;
-  readonly botId: string;
-}
 
 type CommandReply = (session: Session, message: string) => Promise<void>;
 
@@ -130,24 +116,6 @@ function normalizeFilterInput(regexp: string | undefined): string | null {
   return regexp.trim();
 }
 
-/** 从数据库订阅还原稳定用户资料。 */
-function userFromWatcher(watcher: WatcherRecord): XUser {
-  const avatarUrl = watcher.twitter_avatar_url;
-  if (avatarUrl === undefined || avatarUrl === null) {
-    return {
-      id: watcher.twitter_id,
-      username: watcher.twitter_username,
-      fullname: watcher.twitter_fullname,
-    };
-  }
-  return {
-    id: watcher.twitter_id,
-    username: watcher.twitter_username,
-    fullname: watcher.twitter_fullname,
-    avatarUrl,
-  };
-}
-
 /** 在当前频道中按大小写无关用户名查找已有订阅。 */
 function findByHandle(
   watchers: ReadonlyArray<WatcherRecord>,
@@ -157,19 +125,6 @@ function findByHandle(
   return watchers.find(
     (watcher) => canonicalHandle(watcher.twitter_username) === canonical,
   );
-}
-
-/** 将 Account Stream 同步结果附加到用户可见回复。 */
-async function remoteSyncSuffix(
-  synchronizeMonitors: (() => Promise<boolean>) | null,
-): Promise<string> {
-  if (synchronizeMonitors === null) return "";
-  try {
-    const synchronized = await synchronizeMonitors();
-    return synchronized ? "" : "\n已保存，远端 Stream 同步待重试";
-  } catch {
-    return "\n已保存，远端 Stream 同步待重试";
-  }
 }
 
 /** 构造 watch 成功后的规则摘要。 */
@@ -184,77 +139,6 @@ function watchSummary(
     `引用：${options.quote ? "开启" : "关闭"}`,
     `转推：${options.retweet ? "开启" : "关闭"}`,
   ].join("\n");
-}
-
-/** 更新当前频道中同一个稳定 X 用户的订阅设置。 */
-async function updateExistingWatcher(
-  ctx: Context,
-  address: SessionAddress,
-  watcher: WatcherRecord,
-  user: XUser,
-  filter: string | null,
-  options: WatchOptions,
-  reactivate: boolean,
-  baseline: string | null,
-): Promise<void> {
-  const now = new Date();
-  const avatarUrl = user.avatarUrl;
-  await ctx.database.set(
-    "x_watcher",
-    {
-      platform: watcher.platform,
-      channelId: watcher.channelId,
-      twitter_id: watcher.twitter_id,
-    },
-    {
-      userId: address.userId,
-      botId: address.botId,
-      twitter_username: user.username,
-      twitter_fullname: user.fullname,
-      last_tweet_id: reactivate ? baseline : watcher.last_tweet_id,
-      filter_regexp: filter,
-      media: options.media,
-      include_quote: options.quote,
-      include_retweet: options.retweet,
-      active: true,
-      enabled_at: reactivate ? now : watcher.enabled_at,
-      update_at: now,
-      ...(avatarUrl === undefined || avatarUrl.length === 0
-        ? {}
-        : { twitter_avatar_url: avatarUrl }),
-    },
-  );
-}
-
-/** 创建一个从当前最新水位开始的新频道订阅。 */
-async function createWatcher(
-  ctx: Context,
-  address: SessionAddress,
-  user: XUser,
-  baseline: string | null,
-  filter: string | null,
-  options: WatchOptions,
-): Promise<void> {
-  const now = new Date();
-  await ctx.database.create("x_watcher", {
-    platform: address.platform,
-    channelId: address.channelId,
-    userId: address.userId,
-    botId: address.botId,
-    twitter_fullname: user.fullname,
-    twitter_username: user.username,
-    twitter_id: user.id,
-    twitter_avatar_url: user.avatarUrl ?? null,
-    last_tweet_id: baseline,
-    filter_regexp: filter,
-    media: options.media,
-    include_quote: options.quote,
-    include_retweet: options.retweet,
-    active: true,
-    enabled_at: now,
-    create_at: now,
-    update_at: now,
-  });
 }
 
 /** 按配置为列表补齐订阅头像，任何单条失败都不影响列表本身。 */
@@ -349,112 +233,126 @@ function registerWatchCommand(
       };
 
       try {
-        const channelWatchers = await getChannelWatchers(
-          ctx,
-          address.platform,
-          address.channelId,
-        );
-        const localMatch = findByHandle(channelWatchers, parsedHandle.value);
-
-        // 活跃订阅的规则更新不依赖远端 API，数据源短暂故障时仍可操作。
-        if (localMatch !== undefined && localMatch.active) {
-          await updateExistingWatcher(
+        await withManagementLock(ctx, async () => {
+          if (dependencies.canManage !== undefined && !dependencies.canManage()) {
+            throw new Error("订阅管理尚未就绪");
+          }
+          const channelWatchers = await getChannelWatchers(
             ctx,
-            address,
-            localMatch,
-            userFromWatcher(localMatch),
-            filter,
-            watchOptions,
-            false,
-            localMatch.last_tweet_id,
+            address.platform,
+            address.channelId,
           );
+          const localMatch = findByHandle(channelWatchers, parsedHandle.value);
+          if (dependencies.canManage !== undefined && !dependencies.canManage()) {
+            throw new Error("订阅管理尚未就绪");
+          }
+
+          // 活跃订阅的规则更新不依赖远端 API，数据源短暂故障时仍可操作。
+          if (localMatch !== undefined && localMatch.active) {
+            await updateExistingWatcher(
+              ctx,
+              address,
+              localMatch,
+              userFromWatcher(localMatch),
+              filter,
+              watchOptions,
+              false,
+              localMatch.last_tweet_id,
+            );
+            const remote = await remoteSyncSuffix(
+              dependencies.synchronizeMonitors,
+            );
+            await reply(
+              session,
+              `✅ 已更新 ${localMatch.twitter_fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+            );
+            return;
+          }
+
+          const resolved =
+            localMatch === undefined
+              ? await dependencies.source.resolveUser(parsedHandle.value)
+              : success(userFromWatcher(localMatch));
+          if (!resolved.ok) {
+            await reply(
+              session,
+              `❌ 获取 X/Twitter 用户失败：${resolved.error.message}`,
+            );
+            return;
+          }
+
+          const stableMatch = channelWatchers.find(
+            (watcher) => watcher.twitter_id === resolved.value.id,
+          );
+          if (dependencies.canManage !== undefined && !dependencies.canManage()) {
+            throw new Error("订阅管理尚未就绪");
+          }
+          if (stableMatch !== undefined && stableMatch.active) {
+            await updateExistingWatcher(
+              ctx,
+              address,
+              stableMatch,
+              resolved.value,
+              filter,
+              watchOptions,
+              false,
+              stableMatch.last_tweet_id,
+            );
+            const remote = await remoteSyncSuffix(
+              dependencies.synchronizeMonitors,
+            );
+            await reply(
+              session,
+              `✅ 已更新 ${resolved.value.fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+            );
+            return;
+          }
+
+          const baseline = await dependencies.source.fetchBaseline(resolved.value);
+          if (!baseline.ok) {
+            await reply(
+              session,
+              `❌ 建立订阅水位失败：${baseline.error.message}`,
+            );
+            return;
+          }
+
+          const existing = stableMatch === undefined ? localMatch : stableMatch;
+          if (dependencies.canManage !== undefined && !dependencies.canManage()) {
+            throw new Error("订阅管理尚未就绪");
+          }
+          if (existing === undefined) {
+            await createWatcher(
+              ctx,
+              address,
+              resolved.value,
+              baseline.value,
+              filter,
+              watchOptions,
+            );
+          } else {
+            await updateExistingWatcher(
+              ctx,
+              address,
+              existing,
+              resolved.value,
+              filter,
+              watchOptions,
+              true,
+              baseline.value,
+            );
+          }
           const remote = await remoteSyncSuffix(
             dependencies.synchronizeMonitors,
           );
+          const deliveryExpectation = dependencies.mode === "websocket"
+            ? "后续动态将通过实时流推送"
+            : `后续动态将在约 ${dependencies.interval} 分钟内推送`;
           await reply(
             session,
-            `✅ 已更新 ${localMatch.twitter_fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
+            `✅ 已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
           );
-          return;
-        }
-
-        const resolved =
-          localMatch === undefined
-            ? await dependencies.source.resolveUser(parsedHandle.value)
-            : success(userFromWatcher(localMatch));
-        if (!resolved.ok) {
-          await reply(
-            session,
-            `❌ 获取 X/Twitter 用户失败：${resolved.error.message}`,
-          );
-          return;
-        }
-
-        const stableMatch = channelWatchers.find(
-          (watcher) => watcher.twitter_id === resolved.value.id,
-        );
-        if (stableMatch !== undefined && stableMatch.active) {
-          await updateExistingWatcher(
-            ctx,
-            address,
-            stableMatch,
-            resolved.value,
-            filter,
-            watchOptions,
-            false,
-            stableMatch.last_tweet_id,
-          );
-          const remote = await remoteSyncSuffix(
-            dependencies.synchronizeMonitors,
-          );
-          await reply(
-            session,
-            `✅ 已更新 ${resolved.value.fullname} 的订阅\n${watchSummary(filter, watchOptions)}${remote}`,
-          );
-          return;
-        }
-
-        const baseline = await dependencies.source.fetchBaseline(resolved.value);
-        if (!baseline.ok) {
-          await reply(
-            session,
-            `❌ 建立订阅水位失败：${baseline.error.message}`,
-          );
-          return;
-        }
-
-        const existing = stableMatch === undefined ? localMatch : stableMatch;
-        if (existing === undefined) {
-          await createWatcher(
-            ctx,
-            address,
-            resolved.value,
-            baseline.value,
-            filter,
-            watchOptions,
-          );
-        } else {
-          await updateExistingWatcher(
-            ctx,
-            address,
-            existing,
-            resolved.value,
-            filter,
-            watchOptions,
-            true,
-            baseline.value,
-          );
-        }
-        const remote = await remoteSyncSuffix(
-          dependencies.synchronizeMonitors,
-        );
-        const deliveryExpectation = dependencies.mode === "websocket"
-          ? "后续动态将通过实时流推送"
-          : `后续动态将在约 ${dependencies.interval} 分钟内推送`;
-        await reply(
-          session,
-          `✅ 已订阅 ${resolved.value.fullname}，${deliveryExpectation}\n${watchSummary(filter, watchOptions)}${remote}`,
-        );
+        });
       } catch (error) {
         const message = errorMessage(error instanceof Error ? error : String(error));
         logger.error(`watch 命令失败：${message}`);
@@ -463,21 +361,25 @@ function registerWatchCommand(
     });
 }
 
-/** 注册不依赖远端成功即可软取消的 unwatch 命令。 */
+/** 默认软取消；硬取消等待当前会话确认后删除记录。 */
 function registerUnwatchCommand(
   ctx: Context,
   dependencies: CommandDependencies,
   logger: Logger,
 ): void {
   const reply = createCommandReply(dependencies);
+  const pending = new Set<string>();
+  let disposed = false;
+  ctx.on("dispose", () => { disposed = true; pending.clear(); });
   ctx
     .command(
       "x-watcher.unwatch <twitter_username>",
       helpDescription("x-watcher.unwatch"),
     )
+    .option("hard", `--hard ${helpOption("x-watcher.unwatch", "hard", dependencies)}`, { fallback: false })
     .alias("xun")
     .alias("xunwatch")
-    .action(async ({ session }, twitterUsername) => {
+    .action(async ({ session, options }, twitterUsername) => {
       if (session === undefined) return;
       if (twitterUsername === undefined) {
         await reply(session, "⚠️ 请提供要取消订阅的 X/Twitter 用户名");
@@ -514,19 +416,49 @@ function registerUnwatchCommand(
           await reply(session, "⚠️ 订阅不存在");
           return;
         }
+        if (options !== undefined && options.hard === true) {
+          const key = JSON.stringify([address.platform, address.channelId, address.userId]);
+          if (pending.has(key)) {
+            await reply(session, "⚠️ 当前会话已有硬取消确认，请先回复 y/n 或等待超时");
+            return;
+          }
+          pending.add(key);
+          try {
+            await reply(session, h.text(`⚠️ 将永久删除当前会话中 @${target.twitter_username} 的订阅记录（${target.active ? "订阅中" : "已取消"}），删除后无法恢复。请由发起人在 30 秒内回复 y 确认、n 取消；其他回复也会取消。`).toString());
+            const answer = await session.prompt(30_000);
+            if (disposed) return;
+            if (dependencies.canManage !== undefined && !dependencies.canManage()) return;
+            if (typeof answer !== "string" || answer.length === 0) {
+              await reply(session, "⚠️ 确认超时，已取消硬取消操作");
+              return;
+            }
+            if (answer.trim().toLowerCase() !== "y") {
+              await reply(session, "ℹ️ 已取消硬取消操作，订阅记录未删除");
+              return;
+            }
+            // 条件删除防止等待期间重新订阅、修改规则或 worker 更新后误删旧快照。
+            const result = await withManagementLock(ctx, () => deleteWatcher(ctx, target, true));
+            if (result.removed === 0) {
+              await reply(session, "⚠️ 订阅已变更或已被删除，请重新执行命令确认");
+              return;
+            }
+            const remote = await remoteSyncSuffix(dependencies.synchronizeMonitors);
+            await reply(session, h.text(`✅ 已硬取消 @${target.twitter_username} 的订阅，本地记录已永久删除${remote}`).toString());
+          } finally {
+            pending.delete(key);
+          }
+          return;
+        }
         if (!target.active) {
           await reply(session, `⚠️ ${target.twitter_username} 的订阅已经取消`);
           return;
         }
-        await ctx.database.set(
-          "x_watcher",
-          {
-            platform: target.platform,
-            channelId: target.channelId,
-            twitter_id: target.twitter_id,
-          },
-          { active: false, update_at: new Date() },
-        );
+        await withManagementLock(ctx, () => {
+          if (dependencies.canManage !== undefined && !dependencies.canManage()) {
+            throw new Error("订阅管理尚未就绪");
+          }
+          return deactivateWatcher(ctx, target);
+        });
         const remote = await remoteSyncSuffix(
           dependencies.synchronizeMonitors,
         );

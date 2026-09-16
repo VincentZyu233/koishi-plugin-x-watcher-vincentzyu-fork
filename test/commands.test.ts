@@ -15,6 +15,7 @@ import { legacyMessageOutput, type MessageOutput } from "../src/output";
 import type { XDataSourceService } from "../src/services";
 
 interface CommandOptions {
+  readonly hard?: boolean;
   readonly media?: boolean;
   readonly quote?: boolean;
   readonly retweet?: boolean;
@@ -158,12 +159,14 @@ async function executeCommandWithTrace(
   channelId: string,
   args: ReadonlyArray<string | undefined>,
   options: CommandOptions = {},
+  prompt: (timeout: number) => Promise<string | null | undefined> = async () => { throw new Error("不应请求二次确认"); },
 ): Promise<CommandTrace> {
   const replies: string[] = [];
   const deleted: string[] = [];
   const events: string[] = [];
   const channels: string[] = [];
   const session = {
+    prompt,
     platform: "test",
     channelId,
     userId: "operator",
@@ -198,6 +201,81 @@ afterEach(async () => {
 });
 
 describe("公开命令契约", () => {
+  it.each([true, false])("硬取消经 Y 确认删除 active=%s 的当前频道记录，保留其他频道", async (active) => {
+    const { ctx } = await createEnvironment("polling", null, "amsrntk3", true);
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    await executeCommand(ctx, "xwatch", "b", ["Example"]);
+    await ctx.database.set("x_watcher", { channelId: "a" }, { active });
+    const trace = await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async timeout => {
+      expect(timeout).toBe(30000);
+      expect(await ctx.database.get("x_watcher", {})).toHaveLength(2);
+      return " Y ";
+    });
+    expect(await ctx.database.get("x_watcher", {})).toMatchObject([{ channelId: "b", active: true }]);
+    expect(trace.replies).toHaveLength(2);
+    expect(trace.replies.every(text => text.startsWith('<quote id="trigger-message"/>'))).toBe(true);
+    expect(trace.replies[1]).toContain("本地记录已永久删除");
+    expect(trace.channels).toEqual(["a", "a"]);
+  });
+  it.each(["n", "N", "yes", "其他内容", "", null, undefined])("硬取消未明确确认时保留记录：%s", async answer => {
+    const { ctx } = await createEnvironment();
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    const before = await ctx.database.get("x_watcher", {});
+    const trace = await executeCommandWithTrace(ctx, "xunwatch", "a", ["Example"], { hard: true }, async () => answer);
+    expect(await ctx.database.get("x_watcher", {})).toEqual(before);
+    expect(trace.replies[1]).toContain("已取消");
+  });
+  it("确认期间被修改的订阅不删除", async () => {
+    const { ctx } = await createEnvironment();
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    const trace = await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async () => {
+      await ctx.database.set("x_watcher", { channelId: "a" }, { update_at: new Date("2030-01-01") });
+      return "y";
+    });
+    expect(await ctx.database.get("x_watcher", {})).toHaveLength(1);
+    expect(trace.replies[1]).toContain("订阅已变更");
+  });
+  it("确认期间旧记录被删除并重新订阅，不删除新记录", async () => {
+    const { ctx } = await createEnvironment();
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    const trace = await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async () => {
+      await ctx.database.remove("x_watcher", { channelId: "a" });
+      await executeCommand(ctx, "xwatch", "a", ["Example"]);
+      return "y";
+    });
+    expect(await ctx.database.get("x_watcher", {})).toHaveLength(1);
+    expect(trace.replies[1]).toContain("订阅已变更");
+  });
+  it("同会话并行确认被拒绝，取消后可以再次确认", async () => {
+    const { ctx } = await createEnvironment();
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async () => {
+      const replies = await executeCommand(ctx, "xun", "a", ["Example"], { hard: true });
+      expect(replies[0]).toContain("已有硬取消确认");
+      return "n";
+    });
+    await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async () => "y");
+    expect(await ctx.database.get("x_watcher", {})).toHaveLength(0);
+  });
+  it("不存在的订阅不请求确认", async () => {
+    const { ctx } = await createEnvironment();
+    expect((await executeCommand(ctx, "xun", "a", ["Example"], { hard: true }))[0]).toContain("订阅不存在");
+  });
+  it("硬取消后远端同步失败不恢复本地记录，重新订阅创建新记录", async () => {
+    let syncs = 0;
+    const { ctx } = await createEnvironment("websocket", async () => { syncs++; return false; });
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    const before = await ctx.database.get("x_watcher", {});
+    const priorSyncs = syncs;
+    const trace = await executeCommandWithTrace(ctx, "xun", "a", ["Example"], { hard: true }, async () => "y");
+    expect(syncs).toBe(priorSyncs + 1);
+    expect(trace.replies[1]).toContain("远端 Stream 同步待重试");
+    expect(await ctx.database.get("x_watcher", {})).toHaveLength(0);
+    await executeCommand(ctx, "xwatch", "a", ["Example"]);
+    const after = await ctx.database.get("x_watcher", {});
+    expect(after[0]?.id).not.toBe(before[0]?.id);
+    expect(after[0]?.active).toBe(true);
+  });
   it.each([false, true])("多频道订阅时 xla/xre 只回复触发频道，引用开关=%s", async (quote) => {
     const { ctx } = await createEnvironment("polling", null, "amsrntk3", quote);
     await executeCommand(ctx, "xwatch", "channel-a", ["OpenAI"]);

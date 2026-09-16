@@ -6,6 +6,7 @@ import { Context } from "@koishijs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apply } from "../src";
 import { Config } from "../src/config";
+import { OfflineConsole } from "./console-fixture";
 
 interface LifecycleEnvironment {
   readonly ctx: Context;
@@ -17,6 +18,8 @@ const environments: LifecycleEnvironment[] = [];
 async function createEnvironment(): Promise<LifecycleEnvironment> {
   const directory = mkdtempSync(join(tmpdir(), "x-watcher-lifecycle-"));
   const ctx = new Context();
+  // @ts-expect-error console 与工作区 Cordis 的 Inject 类型版本不同
+  ctx.plugin(OfflineConsole);
   // @ts-expect-error 上游 Driver 泛型与 exactOptionalPropertyTypes 不兼容
   ctx.plugin(SQLite, { path: join(directory, "lifecycle.db") });
   await ctx.start();

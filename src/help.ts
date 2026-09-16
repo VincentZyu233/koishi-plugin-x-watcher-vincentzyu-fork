@@ -47,10 +47,11 @@ export function helpCommands(defaults: HelpDefaults = {}): ReadonlyArray<HelpCom
       examples: ["xwa -m --quote --retweet OpenAI", "xwatch OpenAI GPT|模型"],
     },
     {
-      name: "x-watcher.unwatch", emoji: "🔕", syntax: "xun <twitter_username>", aliases: ["xunwatch"],
-      description: "取消当前频道或私聊的用户订阅", options: [],
-      notes: ["用户名必填；软取消并保留记录，不影响其他频道。重新订阅从当前最新动态开始。"],
-      examples: ["xun OpenAI"],
+      name: "x-watcher.unwatch", emoji: "🔕", syntax: "xun [--hard] <twitter_username>", aliases: ["xunwatch"],
+      description: "取消当前频道或私聊的用户订阅",
+      options: [{ key: "hard", syntax: "--hard", description: "永久删除本地订阅记录；发起人在当前会话 30 秒内回复 y 确认，n、其他回复或超时取消" }],
+      notes: ["用户名必填；默认软取消并保留记录，不影响其他频道。重新订阅从当前最新动态开始。", "硬取消可删除活跃或已取消记录，接受大小写 Y/N；删除后不再显示在 xlist，重新订阅创建新记录。"],
+      examples: ["xun OpenAI", "xun --hard OpenAI"],
     },
     {
       name: "x-watcher.list", emoji: "📋", syntax: "xlist", aliases: ["xls"],

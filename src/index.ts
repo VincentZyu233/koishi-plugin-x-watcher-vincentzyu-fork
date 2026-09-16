@@ -1,5 +1,6 @@
 import { Context, Logger } from "koishi";
 import { registerCommands } from "./commands";
+import { createConsoleService, registerConsole, type ConsolePhase } from "./console";
 import {
   Config,
   type Config as PluginConfig,
@@ -21,7 +22,8 @@ import { createImageLimiter } from "./render/image";
 import { createAccountStreamRuntime, createPollingRuntime, type PluginRuntime } from "./runtime";
 
 export const name = "x-watcher";
-export const inject = { required: ["database", "http", "ffmpeg"] };
+export const reusable = false;
+export const inject = { required: ["database", "http", "ffmpeg", "console"] };
 export { Config };
 
 export const usage = `
@@ -143,11 +145,13 @@ export function apply(ctx: Context, config: PluginConfig): void {
   }
 
   let disposed = false;
+  let phase: ConsolePhase = "initializing";
   let runtime: PluginRuntime | null = null;
   let disposeProxy: () => void = () => undefined;
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    phase = "disposed";
     if (runtime !== null) runtime.dispose();
     disposeProxy();
   };
@@ -184,9 +188,11 @@ export function apply(ctx: Context, config: PluginConfig): void {
       createAttachmentOutput(ctx, logger, download, limiter),
     );
     runtime = createRuntime(ctx, config, proxy.rettiwtProxy, output);
+    registerConsole(ctx, createConsoleService(ctx, runtime.source, runtime.mode,
+      runtime.synchronizeMonitors, () => phase));
     registerCommands(
       ctx,
-      commandDependencies(
+      { ...commandDependencies(
         runtime,
         config.interval,
         output,
@@ -196,7 +202,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
         config.enableQuote ?? true,
         config.enableWaitingHint ?? true,
         config.watcherAvatarRefreshMode ?? "cache",
-      ),
+      ), canManage: () => phase === "ready" },
       logger,
     );
   } catch (error) {
@@ -210,15 +216,18 @@ export function apply(ctx: Context, config: PluginConfig): void {
     const migrated = await migrateWatcherTable(ctx);
     if (disposed) return;
     if (!migrated.ok) {
+      phase = "failed";
       logger.error(`迁移 x_watcher 表失败：${migrated.error}`);
       return;
     }
     if (runtime === null) return;
+    phase = "ready";
     try {
       await runtime.start();
       if (disposed) return;
       logger.info(`x-watcher 已启动：${config.provider}/${config.mode}`);
     } catch (error) {
+      phase = "failed";
       runtime.dispose();
       if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
