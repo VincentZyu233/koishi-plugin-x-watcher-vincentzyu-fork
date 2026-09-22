@@ -106,8 +106,7 @@ function createRuntime(
   const delivery = {
     output,
     activityTypes: config.activityTypes ?? ["post", "reply"],
-    maxPostCount: config.maxPostCount ?? 5,
-    maxReplyCount: config.maxReplyCount ?? 5,
+    maxActivityCount: config.maxActivityCount ?? 5,
   };
   if (config.provider === "rettiwt") {
     const source = createRettiwtDataSource({

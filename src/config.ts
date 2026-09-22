@@ -16,8 +16,7 @@ interface CommonConfig {
   readonly outputMode?: OutputMode;
   readonly fontAssetPathRelativeToBaseDir?: string[];
   readonly activityTypes?: PushActivityType[];
-  readonly maxPostCount?: number;
-  readonly maxReplyCount?: number;
+  readonly maxActivityCount?: number;
   readonly latestDefaultUsername?: string;
   readonly recentDefaultUsername?: string;
   readonly recentDefaultCount?: number;
@@ -167,12 +166,9 @@ export const Config = Schema.intersect([
       .required(),
     interval: IntervalSchema,
     activityTypes: ActivityTypesSchema,
-    maxPostCount: Schema.number()
+    maxActivityCount: Schema.number()
       .default(5)
-      .description("📰 单轮每条订阅最多推送的最新推文数；0 或负数表示不限量"),
-    maxReplyCount: Schema.number()
-      .default(5)
-      .description("💬 单轮每条订阅最多推送的最新回复数；0 或负数表示不限量"),
+      .description("📨 单轮每条订阅最多推送的最新动态总数；推文、回复、引用和转推合并计算；0 或负数表示不限量"),
   }).description("📡 订阅设置"),
   Schema.object({
     takumiImageFormat: TakumiImageFormatSchema,

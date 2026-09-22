@@ -38,8 +38,7 @@
 | `recentDefaultCount` | `number` | `5` | `xrecent` 默认每类获取数量；表示推文和回复各取此数量，只接受 `1`～`50` 的整数 |
 | `latestDefaultUsername` | `string` | `amsrntk3` | `xlatest` 省略用户名时查询的账号，不需要填写 `@`；默认账号：[https://x.com/amsrntk3](https://x.com/amsrntk3) |
 | `activityTypes` | `("post" \| "reply")[]` | `["post", "reply"]` | 自动推送的动态类型；引用和转推仍由 `watch` 命令选项控制 |
-| `maxPostCount` | `number` | `5` | 单轮每条订阅最多推送的最新推文数；`0` 或负数表示不限量 |
-| `maxReplyCount` | `number` | `5` | 单轮每条订阅最多推送的最新回复数；`0` 或负数表示不限量 |
+| `maxActivityCount` | `number` | `5` | 单轮每条订阅最多推送的最新动态总数；推文、回复、引用和转推合并计算。不同账号、频道和机器人分别计数；`0` 或负数表示不限量 |
 | `fontAssetPathRelativeToBaseDir` | `string[]` | `["data", "fonts", "LXGWWenKaiMono-Regular.ttf"]` | Takumi 字体路径片段；依次拼接到 Koishi 根目录 `ctx.baseDir`，当前为只读配置且不会自动下载字体 |
 | `watcherAvatarRefreshMode` | `"cache" \| "placeholder" \| "always"` | `cache` | `xlist` 图片中头像的更新策略；`cache` 缺失时补查并缓存，`placeholder` 仅使用缓存并显示首字母，`always` 每次列表时刷新 |
 | `takumiImageFormat` | `"jpg" \| "png" \| "webp"` | `jpg` | Takumi 图片输出格式；JPG 默认可降低 OneBot 上传体积 |

@@ -25,34 +25,35 @@ type ContinueDelivery = () => boolean;
 export interface DeliveryOptions {
   readonly output: MessageOutput;
   readonly activityTypes: ReadonlyArray<PushActivityType>;
-  readonly maxPostCount: number;
-  readonly maxReplyCount: number;
+  readonly maxActivityCount: number;
 }
 
 const defaultDeliveryOptions: DeliveryOptions = {
   output: legacyMessageOutput,
   activityTypes: ["post", "reply"],
-  maxPostCount: 0,
-  maxReplyCount: 0,
+  maxActivityCount: 0,
 };
 
-/** 从新到旧领取每类额度；返回集合外的旧动态仍会被消费并推进水位。 */
+/** 按单条订阅从新到旧领取统一额度；额度外的旧动态仍会被消费并推进水位。 */
 function deliverableActivityIds(
+  watcher: WatcherRecord,
   activities: ReadonlyArray<XActivity>,
   delivery: DeliveryOptions,
+  limitActivities: boolean,
 ): ReadonlySet<string> {
   const deliverable = new Set<string>();
-  let posts = 0;
-  let replies = 0;
+  const compiled = compileFilter(watcher.filter_regexp);
+  if (!compiled.ok) return deliverable;
   const newestFirst = [...normalizeActivityOrder(activities)].reverse();
   for (const activity of newestFirst) {
-    if (activity.kind === "post") {
-      if (delivery.maxPostCount > 0 && posts >= delivery.maxPostCount) continue;
-      posts += 1;
-    } else if (activity.kind === "reply") {
-      if (delivery.maxReplyCount > 0 && replies >= delivery.maxReplyCount) continue;
-      replies += 1;
-    }
+    if (!isAfterWatcherCursor(watcher, activity)) continue;
+    if (!isActivityEnabled(watcher, activity, delivery.activityTypes)) continue;
+    if (compiled.value !== null && !compiled.value.test(activity.text)) continue;
+    if (
+      limitActivities &&
+      delivery.maxActivityCount > 0 &&
+      deliverable.size >= delivery.maxActivityCount
+    ) continue;
     deliverable.add(activity.id);
   }
   return deliverable;
@@ -142,8 +143,14 @@ async function processWatcherActivities(
   activities: ReadonlyArray<XActivity>,
   canContinue: ContinueDelivery,
   delivery: DeliveryOptions,
+  limitActivities: boolean,
 ): Promise<boolean> {
-  const deliverableIds = deliverableActivityIds(activities, delivery);
+  const deliverableIds = deliverableActivityIds(
+    watcher,
+    activities,
+    delivery,
+    limitActivities,
+  );
   for (const activity of normalizeActivityOrder(activities)) {
     if (!canContinue()) return false;
 
@@ -323,6 +330,7 @@ async function recoverWatchers(
         fetched.value.activities,
         canContinue,
         delivery,
+        true,
       );
       if (!delivered) completed = false;
     }
@@ -407,6 +415,7 @@ export async function routeLiveActivities(
       matching,
       canContinue,
       delivery,
+      false,
     );
     if (!delivered) completed = false;
   }

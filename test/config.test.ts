@@ -73,8 +73,7 @@ describe("插件配置（仅 Rettiwt）", () => {
       outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["post", "reply"],
-      maxPostCount: 5,
-      maxReplyCount: 5,
+      maxActivityCount: 5,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
       recentDefaultCount: 5,
@@ -102,8 +101,7 @@ describe("插件配置（仅 Rettiwt）", () => {
       outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["reply"],
-      maxPostCount: 3,
-      maxReplyCount: -1,
+      maxActivityCount: 3,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
       recentDefaultCount: 3,
@@ -118,8 +116,7 @@ describe("插件配置（仅 Rettiwt）", () => {
       outputMode: "card-text",
       fontAssetPathRelativeToBaseDir: ["data", "fonts", "LXGWWenKaiMono-Regular.ttf"],
       activityTypes: ["reply"],
-      maxPostCount: 3,
-      maxReplyCount: -1,
+      maxActivityCount: 3,
       latestDefaultUsername: "amsrntk3",
       recentDefaultUsername: "OpenAI",
       recentDefaultCount: 3,
@@ -136,6 +133,17 @@ describe("插件配置（仅 Rettiwt）", () => {
       enableProxy: false,
       proxyUrl: "http://127.0.0.1:7890",
     });
+  });
+
+  it("使用统一自动推送上限并忽略已删除的旧字段", () => {
+    expect(Config({
+      apiKeys: ["key"],
+      maxActivityCount: -1,
+      maxPostCount: 99,
+      maxReplyCount: 99,
+    })).toMatchObject({ maxActivityCount: -1 });
+    expect(Config({ apiKeys: ["key"] })).not.toHaveProperty("maxPostCount");
+    expect(Config({ apiKeys: ["key"] })).not.toHaveProperty("maxReplyCount");
   });
 
   it("限制 xrecent 默认每类数量为 1～50 的整数", () => {

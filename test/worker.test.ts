@@ -8,10 +8,12 @@ import { extendWatcherTable, type WatcherRecord } from "../src/database";
 import { success, type XActivity } from "../src/domain";
 import type { XDataSourceService } from "../src/services";
 import { legacyMessageOutput } from "../src/output";
+import type { DeliveryOptions } from "../src/worker";
 import {
   createDeliveryTracker,
   createPollingRunner,
   recoverActiveWatchers,
+  routeLiveActivities,
 } from "../src/worker";
 
 interface SentMessage {
@@ -204,36 +206,194 @@ describe("动态 worker", () => {
     expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("200");
   });
 
-  it("补漏只发送每类最新额度且仍推进到最新水位", async () => {
+  it("补漏混合四类动态时只发送统一额度内的最新动态并推进水位", async () => {
     const { ctx, bot } = await createEnvironment();
     await createWatcher(ctx, { include_quote: true, include_retweet: true });
+    const activities = Array.from({ length: 100 }, (_, index) => activity(
+      String(index + 101),
+      index % 4 === 0
+        ? "post"
+        : index % 4 === 1
+          ? "reply"
+          : index % 4 === 2
+            ? "quote"
+            : "retweet",
+      `activity-${index + 101}`,
+    ));
     const completed = await recoverActiveWatchers(
       ctx,
-      createSource([
-        activity("101", "post", "old post"),
-        activity("102", "reply", "old reply"),
-        activity("103", "post", "newer post"),
-        activity("104", "reply", "new reply"),
-        activity("105", "post", "newest post"),
-      ]),
+      createSource(activities),
       new Logger("worker-test"),
       createDeliveryTracker(),
       () => true,
       {
         output: legacyMessageOutput,
         activityTypes: ["post", "reply"],
-        maxPostCount: 2,
-        maxReplyCount: 1,
+        maxActivityCount: 5,
       },
     );
 
     expect(completed).toBe(true);
-    expect(bot.messages.map((message) => message.content)).toHaveLength(3);
-    expect(bot.messages.map((message) => message.content).join("\n")).not.toContain("old post");
-    expect(bot.messages.map((message) => message.content).join("\n")).not.toContain("old reply");
-    expect(bot.messages.map((message) => message.content).join("\n")).toContain("newest post");
+    expect(bot.messages).toHaveLength(5);
+    expect(bot.messages.map((message) => message.content)).toEqual([
+      expect.stringContaining("activity-196"),
+      expect.stringContaining("activity-197"),
+      expect.stringContaining("activity-198"),
+      expect.stringContaining("activity-199"),
+      expect.stringContaining("activity-200"),
+    ]);
+    expect(bot.messages.map((message) => message.content).join("\n"))
+      .not.toContain("activity-195");
+    for (const id of ["196", "197", "198", "199", "200"]) {
+      expect(bot.messages.map((message) => message.content).join("\n"))
+        .toContain(`activity-${id}`);
+    }
     const rows = await ctx.database.get("x_watcher", {});
-    expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("105");
+    expect(rows[0] === undefined ? null : rows[0].last_tweet_id).toBe("200");
+
+    await recoverActiveWatchers(
+      ctx,
+      createSource(activities),
+      new Logger("worker-test"),
+      createDeliveryTracker(),
+      () => true,
+      {
+        output: legacyMessageOutput,
+        activityTypes: ["post", "reply"],
+        maxActivityCount: 5,
+      },
+    );
+    expect(bot.messages).toHaveLength(5);
+  });
+
+  it("每条订阅独立获得统一额度，过滤和关闭类型不占额度", async () => {
+    const { ctx, bot } = await createEnvironment();
+    await createWatcher(ctx, {
+      channelId: "filtered",
+      filter_regexp: "match",
+    });
+    await createWatcher(ctx, {
+      channelId: "all",
+      include_quote: true,
+      include_retweet: true,
+    });
+    const activities = [
+      activity("101", "post", "match old"),
+      activity("102", "quote", "match disabled quote"),
+      activity("103", "reply", "ignore"),
+      activity("104", "post", "match middle"),
+      activity("105", "reply", "match newer"),
+      activity("106", "retweet", "match disabled retweet"),
+      activity("107", "post", "match newest"),
+      activity("108", "quote", "match newest quote"),
+    ];
+    let fetches = 0;
+    const completed = await recoverActiveWatchers(
+      ctx,
+      createSource(activities, () => {
+        fetches += 1;
+        return Promise.resolve();
+      }),
+      new Logger("worker-test"),
+      createDeliveryTracker(),
+      () => true,
+      {
+        output: legacyMessageOutput,
+        activityTypes: ["post", "reply"],
+        maxActivityCount: 3,
+      },
+    );
+
+    expect(completed).toBe(true);
+    expect(fetches).toBe(1);
+    expect(bot.messages.filter((message) => message.channelId === "filtered")).toHaveLength(3);
+    expect(bot.messages.filter((message) => message.channelId === "all")).toHaveLength(3);
+    const filtered = bot.messages.filter((message) => message.channelId === "filtered")
+      .map((message) => message.content).join("\n");
+    expect(filtered).toContain("match middle");
+    expect(filtered).toContain("match newer");
+    expect(filtered).toContain("match newest");
+    expect(filtered).not.toContain("match old");
+    expect(filtered).not.toContain("disabled quote");
+    expect(filtered).not.toContain("disabled retweet");
+  });
+
+  it("额度内发送失败时保留失败项供下一轮重试", async () => {
+    const { ctx, bot } = await createEnvironment();
+    await createWatcher(ctx, {
+      channelId: "broken",
+      last_tweet_id: "200",
+      include_quote: true,
+    });
+    const activities = [
+      activity("201", "post", "skipped old"),
+      activity("202", "reply", "retry first"),
+      activity("203", "quote", "retry second"),
+    ];
+    bot.failingChannels.add("broken");
+    const delivery: DeliveryOptions = {
+      output: legacyMessageOutput,
+      activityTypes: ["post", "reply"],
+      maxActivityCount: 2,
+    };
+
+    expect(await recoverActiveWatchers(
+      ctx, createSource(activities), new Logger("worker-test"),
+      createDeliveryTracker(), () => true, delivery,
+    )).toBe(false);
+    expect((await ctx.database.get("x_watcher", {}))[0]?.last_tweet_id).toBe("201");
+
+    bot.failingChannels.delete("broken");
+    expect(await recoverActiveWatchers(
+      ctx, createSource(activities), new Logger("worker-test"),
+      createDeliveryTracker(), () => true, delivery,
+    )).toBe(true);
+    expect(bot.messages.map((message) => message.content).join("\n"))
+      .toContain("retry first");
+    expect((await ctx.database.get("x_watcher", {}))[0]?.last_tweet_id).toBe("203");
+  });
+
+  it("零和负数的统一额度不限制轮询恢复", async () => {
+    const { ctx, bot } = await createEnvironment();
+    await createWatcher(ctx, { include_quote: true, include_retweet: true });
+    const activities = Array.from({ length: 8 }, (_, index) => activity(
+      String(index + 101),
+      index % 2 === 0 ? "post" : "quote",
+      `activity-${index}`,
+    ));
+    const run = (maxActivityCount: number) => recoverActiveWatchers(
+      ctx, createSource(activities), new Logger("worker-test"),
+      createDeliveryTracker(), () => true,
+      { output: legacyMessageOutput, activityTypes: ["post", "reply"], maxActivityCount },
+    );
+
+    expect(await run(0)).toBe(true);
+    expect(bot.messages).toHaveLength(8);
+    await ctx.database.set("x_watcher", {}, { last_tweet_id: "100" });
+    expect(await run(-1)).toBe(true);
+    expect(bot.messages).toHaveLength(16);
+  });
+
+  it("实时 Stream 事件不受轮询恢复额度限制", async () => {
+    const { ctx, bot } = await createEnvironment();
+    await createWatcher(ctx, { include_quote: true, include_retweet: true });
+    expect(await routeLiveActivities(
+      ctx,
+      new Logger("worker-test"),
+      createDeliveryTracker(),
+      [
+        activity("101", "post", "live post"),
+        activity("102", "reply", "live reply"),
+        activity("103", "quote", "live quote"),
+      ],
+      () => true,
+      {
+        output: legacyMessageOutput,
+        activityTypes: ["post", "reply"],
+        maxActivityCount: 1,
+      },
+    )).toBe(true);
+    expect(bot.messages).toHaveLength(3);
   });
 
   it("混合空水位时使用所有订阅中最早的真实边界", async () => {
