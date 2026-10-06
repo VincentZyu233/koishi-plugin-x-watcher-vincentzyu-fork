@@ -1,6 +1,7 @@
 import type { Context } from "koishi";
 import { resolve } from "node:path";
 import { z } from "zod";
+import {} from "@koishijs/console";
 import {} from "@koishijs/plugin-console";
 import type { XDataSourceService } from "./services";
 import { compileFilter, normalizeHandle } from "./domain";
@@ -164,7 +165,7 @@ export type SubscriptionConsole = ReturnType<typeof createConsoleService>;
 export type ConsoleState = Awaited<ReturnType<SubscriptionConsole["state"]>>;
 export type ConsoleRow = ConsoleState["rows"][number];
 
-declare module "@koishijs/plugin-console" {
+declare module "@koishijs/console" {
   interface Events {
     "x-watcher/state"(): Promise<ConsoleState>;
     "x-watcher/create"(input: CreateSubscription): Promise<ConsoleOperationResult>;
