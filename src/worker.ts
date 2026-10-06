@@ -34,6 +34,12 @@ const defaultDeliveryOptions: DeliveryOptions = {
   maxActivityCount: 0,
 };
 
+let networkCooldownUntil = 0;
+
+export function resetNetworkCooldown(): void {
+  networkCooldownUntil = 0;
+}
+
 /** 按单条订阅从新到旧领取统一额度；额度外的旧动态仍会被消费并推进水位。 */
 function deliverableActivityIds(
   watcher: WatcherRecord,
@@ -280,6 +286,7 @@ async function recoverWatchers(
 ): Promise<boolean> {
   const groups = groupWatchers(watchers);
   let completed = true;
+  let consecutiveTransportFailures = 0;
   for (const grouped of groups.values()) {
     if (!canContinue()) return false;
     const snapshot = grouped[0];
@@ -312,8 +319,22 @@ async function recoverWatchers(
         `获取 @${first.twitter_username} 动态失败 [${fetched.error.kind}]：${fetched.error.message}`,
       );
       completed = false;
+      if (fetched.error.kind === "transport") {
+        consecutiveTransportFailures += 1;
+        if (consecutiveTransportFailures >= 3) {
+          networkCooldownUntil = Date.now() + 5 * 60_000;
+          logger.warn(
+            `网络连接连续失败达到 3 次（可能是代理未启动或网络故障），中止本轮剩余账号检查并冷却 5 分钟`,
+          );
+          break;
+        }
+      } else {
+        consecutiveTransportFailures = 0;
+      }
       continue;
     }
+    consecutiveTransportFailures = 0;
+    networkCooldownUntil = 0;
     for (const watcher of currentGroup) {
       // 远端分页可能耗时较长，投递前重新读取订阅，避免取消或重新启用后使用旧水位。
       const refreshed = await ctx.database.get("x_watcher", {
@@ -434,6 +455,11 @@ export function createPollingRunner(
   let running = false;
   return async () => {
     if (!canContinue()) return;
+    if (Date.now() < networkCooldownUntil) {
+      const remainingSeconds = Math.ceil((networkCooldownUntil - Date.now()) / 1000);
+      logger.debug(`网络异常冷却退避中，跳过本轮检查（剩余 ${remainingSeconds} 秒）`);
+      return;
+    }
     if (running) {
       logger.warn("上一轮 X 动态检查尚未结束，跳过本轮");
       return;

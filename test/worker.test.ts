@@ -5,7 +5,7 @@ import SQLite from "@koishijs/plugin-database-sqlite";
 import { Bot, Context, h, Logger } from "@koishijs/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { extendWatcherTable, type WatcherRecord } from "../src/database";
-import { success, type XActivity } from "../src/domain";
+import { failure, sourceError, success, type XActivity } from "../src/domain";
 import type { XDataSourceService } from "../src/services";
 import { legacyMessageOutput } from "../src/output";
 import type { DeliveryOptions } from "../src/worker";
@@ -13,6 +13,7 @@ import {
   createDeliveryTracker,
   createPollingRunner,
   recoverActiveWatchers,
+  resetNetworkCooldown,
   routeLiveActivities,
 } from "../src/worker";
 
@@ -590,5 +591,39 @@ describe("动态 worker", () => {
     );
 
     expect(fetchedUsers).toHaveLength(1);
+  });
+
+  it("网络传输连续失败达到 3 次时中止本轮检查并进入冷却", async () => {
+    resetNetworkCooldown();
+    const { ctx } = await createEnvironment();
+    await createWatcher(ctx, { twitter_id: "1", twitter_username: "User1" });
+    await createWatcher(ctx, { twitter_id: "2", twitter_username: "User2" });
+    await createWatcher(ctx, { twitter_id: "3", twitter_username: "User3" });
+    await createWatcher(ctx, { twitter_id: "4", twitter_username: "User4" });
+    const fetchedUsers: string[] = [];
+    const source: XDataSourceService = {
+      provider: "rettiwt",
+      resolveUser: async () => failure(sourceError("rettiwt", "transport", "net error")),
+      fetchBaseline: async () => failure(sourceError("rettiwt", "transport", "net error")),
+      fetchAfter: async (user) => {
+        fetchedUsers.push(user.id);
+        return failure(sourceError("rettiwt", "transport", "net error"));
+      },
+    };
+
+    const runner = createPollingRunner(
+      ctx,
+      source,
+      new Logger("worker-test"),
+      createDeliveryTracker(),
+    );
+
+    await runner();
+    expect(fetchedUsers).toHaveLength(3);
+
+    await runner();
+    expect(fetchedUsers).toHaveLength(3);
+
+    resetNetworkCooldown();
   });
 });
