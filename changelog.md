@@ -14,6 +14,10 @@
 
 ## 🚀 本仓库独立更新
 
+### 🛡️ 0.4.2-beta.3+20261007 — 适配 CI 测试字体环境
+
+- **CI 稳定性修复**：在 `test/takumi.test.ts` 中自适应判定宿主字体是否存在（`describe.skipIf(!fontExists)`），避免独立 CI 运行环境下因缺少宿主环境字体文件导致的测试失败。
+
 ### 🛡️ 0.4.2-beta.2+20261007 — 修复控制台事件类型声明
 
 - **类型修复**：修正 `@koishijs/console` 控制台模块扩展声明，解决 CI `npm run typecheck` 中事件无法赋给 `keyof Events` 的报错。

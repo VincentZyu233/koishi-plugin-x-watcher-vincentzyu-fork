@@ -1,6 +1,8 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Context, Logger } from "@koishijs/core";
 import { describe, expect, it } from "vitest";
+import { FONT_ASSET_PATH_RELATIVE_TO_BASE_DIR } from "../src/config";
 import { createTakumiRenderer } from "../src/render/takumi";
 
 function renderingContext(): Context {
@@ -39,7 +41,11 @@ function pageAt(pages: ReadonlyArray<Buffer>, index: number): Buffer {
   return page;
 }
 
-describe("Takumi WASM 图片渲染", () => {
+const fontExists = existsSync(
+  join(resolve(__dirname, "../../.."), ...FONT_ASSET_PATH_RELATIVE_TO_BASE_DIR),
+);
+
+describe.skipIf(!fontExists)("Takumi WASM 图片渲染", () => {
   it("配图保持小图原尺寸、裁剪模式填框，卡片高度按实际内容变化", async () => {
     const ctx = renderingContext();
     Object.defineProperty(ctx, "http", { value: { get: async () => Buffer.from(
