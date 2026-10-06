@@ -14,6 +14,10 @@
 
 ## 🚀 本仓库独立更新
 
+### 🛡️ 0.4.2-beta.4+20261007 — 测试文件命名规整
+
+- **测试重命名**：将 `test/source-constraints.test.ts` 重命名为统一单词命名的 `test/constraints.test.ts`。
+
 ### 🛡️ 0.4.2-beta.3+20261007 — 适配 CI 测试字体环境
 
 - **CI 稳定性修复**：在 `test/takumi.test.ts` 中自适应判定宿主字体是否存在（`describe.skipIf(!fontExists)`），避免独立 CI 运行环境下因缺少宿主环境字体文件导致的测试失败。
