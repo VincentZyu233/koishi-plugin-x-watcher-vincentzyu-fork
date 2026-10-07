@@ -1,13 +1,7 @@
 import type { Logger } from "koishi";
-import {
-  type Dispatcher,
-  getGlobalDispatcher,
-  ProxyAgent,
-  setGlobalDispatcher,
-  Socks5ProxyAgent,
-} from "undici";
+import { type Dispatcher, ProxyAgent, Socks5ProxyAgent } from "undici";
 
-/** 显式代理同时覆盖 Rettiwt Axios 请求与其依赖中的原生 fetch。 */
+/** 代理配置，仅供 Rettiwt Axios 请求局部使用，不修改全局 dispatcher。 */
 export interface ProxyLease {
   readonly rettiwtProxy: string | undefined;
   readonly dispose: () => void;
@@ -17,15 +11,6 @@ export interface ProxyOptions {
   readonly enabled: boolean;
   readonly url: string;
 }
-
-interface ActiveProxy {
-  readonly url: string;
-  readonly dispatcher: Dispatcher;
-  readonly previous: Dispatcher;
-  references: number;
-}
-
-let activeProxy: ActiveProxy | null = null;
 
 function normalizeProxyUrl(value: string): string {
   let url: URL;
@@ -57,27 +42,11 @@ function proxyLabel(value: string): string {
   return `${url.protocol}//${url.hostname}${port}`;
 }
 
-function createLease(active: ActiveProxy, logger: Logger): ProxyLease {
-  let disposed = false;
-  return {
-    rettiwtProxy: active.url,
-    dispose: () => {
-      if (disposed) return;
-      disposed = true;
-      active.references -= 1;
-      if (active.references > 0) return;
-      if (activeProxy === active) activeProxy = null;
-      if (getGlobalDispatcher() === active.dispatcher) {
-        setGlobalDispatcher(active.previous);
-      }
-      void active.dispatcher.close().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`关闭代理 dispatcher 失败：${message}`);
-      });
-    },
-  };
-}
-
+/**
+ * 校验并返回代理配置，不修改全局 dispatcher。
+ * Rettiwt-api 内部使用独立的 HttpProxyAgent/SocksProxyAgent，天然局部化；
+ * media.ts 中的下载请求也通过 createDispatcher() 局部传入，不依赖全局。
+ */
 export function installProxy(
   config: ProxyOptions,
   logger: Logger,
@@ -87,22 +56,9 @@ export function installProxy(
   }
 
   const proxyUrl = normalizeProxyUrl(config.url);
-  if (activeProxy !== null) {
-    if (activeProxy.url !== proxyUrl) {
-      throw new Error("已有其他 x-watcher 实例启用了不同的代理地址");
-    }
-    if (getGlobalDispatcher() !== activeProxy.dispatcher) {
-      throw new Error("全局 fetch dispatcher 已被其他组件替换");
-    }
-    activeProxy.references += 1;
-    logger.info(`复用代理：${proxyLabel(proxyUrl)}`);
-    return createLease(activeProxy, logger);
-  }
-
-  const previous = getGlobalDispatcher();
-  const dispatcher = createDispatcher(proxyUrl);
-  setGlobalDispatcher(dispatcher);
-  logger.info(`已启用代理：${proxyLabel(proxyUrl)}`);
-  activeProxy = { url: proxyUrl, dispatcher, previous, references: 1 };
-  return createLease(activeProxy, logger);
+  logger.info(`已启用代理（局部）：${proxyLabel(proxyUrl)}`);
+  return {
+    rettiwtProxy: proxyUrl,
+    dispose: () => undefined,
+  };
 }
